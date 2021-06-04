@@ -10,7 +10,7 @@ except ImportError:
 import logging
 from collections import Counter, defaultdict
 import random
-from typing import Dict, List, Union, Tuple
+from typing import Dict, List, Union, Tuple, Any
 
 import torch
 
@@ -619,6 +619,38 @@ class Dataset(object):
         else:
             yield from self.batch_generator_(return_raw=return_raw)
 
+    def _get_noised_batch(self, raw_words, raw_targets, apply_noise: Dict[str, Dict[str, Any]]):
+        """
+
+        """
+        raw_words = list(raw_words)  # Was a Tuple before
+
+        # Run N strategies per N sentences rand on the range [0.00:1.00(
+        apply_strategies = torch.rand(len(apply_noise), len(raw_words))
+
+        # Iterate over strategies
+        for strat_id, (strat_name, strategy) in enumerate(apply_noise.items()):
+            targets = (apply_strategies[strat_id] < strategy.get("ratio", 0)).nonzero(as_tuple=True)
+
+            if not len(targets):
+                continue
+
+            changed_index = targets[0].tolist()
+
+            for index, sent, truth in zip(
+                    changed_index,
+                    map(raw_words.__getitem__, changed_index),
+                    map(raw_targets.__getitem__, changed_index)
+            ):
+                raw_words[index] = getattr(NoiseStrategies, strat_name)(
+                    sent,
+                    tasks=changed_index,
+                    **strategy.get("params", {})
+                )
+
+        # Recreate a batch
+        return self.pack_batch(list(zip(raw_words, raw_targets)), device=self.device)
+
     def batch_generator(self, return_raw=False, apply_noise=None):
         """
         Generator over dataset batches. Each batch is a tuple of (input, tasks):
@@ -629,36 +661,8 @@ class Dataset(object):
         """
         if apply_noise or return_raw:
             for batch, raw in self._batch_generator_cached(return_raw=True):
-
                 if apply_noise:  # If we need to apply noise
-                    # Retrieve raw input and raw targets
-                    raw_words, raw_targets = raw
-                    raw_words = list(raw_words) # Was a Tuple before
-                    # Run N strategies per N sentences rand on the range [0.00:1.00(
-                    apply_strategies = torch.rand(len(apply_noise), len(raw_words))
-
-                    # Iterate over strategies
-                    for strat_id, (strat_name, strategy) in enumerate(apply_noise.items()):
-                        targets = (apply_strategies[strat_id] < strategy.get("ratio", 0)).nonzero(as_tuple=True)
-
-                        if not len(targets):
-                            continue
-
-                        changed_index = targets[0].tolist()
-
-                        for index, sent, truth in zip(
-                            changed_index,
-                            map(raw_words.__getitem__, changed_index),
-                            map(raw_targets.__getitem__, changed_index)
-                        ):
-                            raw_words[index] = getattr(NoiseStrategies, strat_name)(
-                                sent,
-                                tasks=changed_index,
-                                **strategy.get("params", {})
-                            )
-
-                    # Recreate a batch
-                    batch = self.pack_batch(list(zip(raw_words, raw_targets)), device=self.device)
+                    batch = self._get_noised_batch(*raw, apply_noise=apply_noise)
                 if return_raw:
                     # Batch = ((word, wlen), (char, clen)), tasks
                     # Raw Tuple[List[words], Tuple[Dict[task, List[gold]]...]]
