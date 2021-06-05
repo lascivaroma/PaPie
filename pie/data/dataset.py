@@ -10,8 +10,12 @@ except ImportError:
 import logging
 from collections import Counter, defaultdict
 import random
-from typing import Dict, List, Union, Tuple, Any
+from typing import Dict, Any, List, Set, Union, Tuple
 
+import tokenizers
+from tokenizers.pre_tokenizers import Whitespace
+from tokenizers import normalizers
+from tokenizers import models
 import torch
 
 from pie import utils, torch_utils, constants
@@ -331,6 +335,180 @@ class LabelEncoder(object):
         return inst
 
 
+class HugginfaceEncoder(LabelEncoder):
+    """ Implements an interface to use or reuse Bert-Like encoders in Pie.
+
+    https://huggingface.co/docs/tokenizers/python/latest/api/reference.html#tokenizer
+
+    """
+    def __init__(self, level='token', name=None, lower=False,
+                 utfnorm=False, utfnorm_type='NFKD', drop_diacritics=False,
+                 # Not used right now
+                 preprocessor=None, max_size=None, min_freq=1,
+                 pad=True, eos=False, bos=False, unk=None, reserved=(),
+                 tokenizer_class: str = "Unigram", tokenizer_params: Dict[str, Any] = None,
+                 **meta):
+
+        if level.lower() not in ('token', 'char'):
+            raise ValueError("`level` must be 'token' or 'char'. Got ", level)
+
+        self.meta = meta  # dictionary with other task-relevant information
+
+        self.max_size = max_size
+        self.level = level.lower()
+        self.name = name
+
+        self.unk = constants.UNK if unk else None
+        self.pad = constants.PAD if pad else None
+        self.eos = constants.EOS if eos else None
+        self.bos = constants.BOS if bos else None
+        self.reserved = reserved + (constants.UNK,)  # always use <unk>
+        self.reserved += tuple([sym for sym in [self.eos, self.pad, self.bos] if sym])
+
+        self.lower = lower
+        self.utfnorm = utfnorm
+        self.utfnorm_type = utfnorm_type
+        self.drop_diacritics = drop_diacritics
+
+        # Drop-in replacement of previous systems
+        norms = []
+        if self.utfnorm:
+            norms.append(getattr(normalizers, self.utfnorm_type.upper())())
+        if self.drop_diacritics:
+            norms.append(normalizers.StripAccents())
+        if self.lower:
+            norms.append(normalizers.Lowercase())
+
+        self.normalizers = normalizers.Sequence()
+
+
+        self._tokenizer_cls: str = tokenizer_class
+        self._tokenizer: tokenizers.Tokenizer = tokenizers.Tokenizer(getattr(models, self._tokenizer_cls))
+        self._tokenizer.pre_tokenizer = Whitespace()
+        self._tokenizer.normalizer = self.normalizers
+
+        self._tokenizer_params = tokenizer_params
+
+        self._table: Dict[str, int] = {}
+        self._known_tokens: Set[str] = set()
+
+        self.fitted = False
+
+    @property
+    def known_tokens(self):
+        if not self.fitted:
+            raise ValueError("Vocabulary hasn't been computed yet")
+        elif not self._known_tokens:
+            self._known_tokens = set([
+                key
+                for key in self.tokenizer.get_vocab().keys()
+                if key not in self.reserved
+            ])
+        return self._known_tokens
+
+    @property
+    def model(self):
+        return self._tokenizer.model
+
+    @property
+    def tokenizer(self):
+        return self._tokenizer.model
+
+    @property
+    def table(self) -> Dict[str, int]:
+        if not self.fitted:
+            raise ValueError("Vocabulary hasn't been computed yet")
+        elif not self._table:
+            self._table = self.tokenizer.get_vocab()
+        return self._table
+
+    def transform(self, seq, rseq=None):
+        if not self.fitted:
+            raise ValueError("Vocabulary hasn't been computed yet")
+
+        def transform_seq(s):
+            output = []
+            if self.bos:
+                output.append(self.get_bos())
+
+            output.extend(self._tokenizer.encode(s, is_pretokenized=True, add_special_tokens=False).ids)
+
+            if self.eos:
+                output.append(self.get_eos())
+
+            return output
+
+        # preprocess
+        seq = self.preprocess(seq, rseq)
+
+        return transform_seq(seq)
+
+    def compute_vocab(self):
+        self.fitted = True
+        return True
+
+    def add(self, seq, rseq=None):
+        if self.fitted:
+            raise ValueError("Encoder already fitted")
+        return True
+
+    def train(self, datasets: List[str]):
+        # train on datasets
+
+        trainer = type(self.model.get_trainer())(
+            vocab_size=self.max_size,
+            show_progress=True,
+            unk_token=self.unk,
+            pad_token=self.pad,
+            special_tokens=[self.unk, self.pad]
+        )
+        self.tokenizer.train(datasets, trainer=trainer)
+        return
+
+    def _get_sym(self, sym):
+        if not self.fitted:
+            raise ValueError()
+
+    # save and from_json
+    """
+    from tokenizers import Tokenizer
+    from tokenizers.pre_tokenizers import Whitespace
+    from tokenizers.models import Unigram, BPE
+    from tokenizers import normalizers
+    from tokenizers.normalizers import Lowercase, NFD, StripAccents
+    
+    model = Unigram()
+    tokenizer = Tokenizer(model)
+    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.normalizer = normalizers.Sequence([NFD(), Lowercase(), StripAccents()])
+    
+    trainer = model.get_trainer().__class__(vocab_size=8000, show_progress=True, unk_token="[UNK]",
+                                            pad_token="[PAD]",
+                                            special_tokens=["[UNK]", "[PAD]"])
+    tokenizer.train(["full.txt"], trainer=trainer)
+    # UnigramTrainer(self, vocab_size=8000, show_progress=True, special_tokens=[])
+    """
+
+    @classmethod
+    def from_json(cls, obj):
+        inst = cls(pad=obj['pad'], eos=obj['eos'], bos=obj['bos'],
+                   level=obj['level'], target=obj['target'], lower=obj['lower'],
+                   max_size=obj['max_size'], min_freq=obj['min_freq'],
+                   drop_diacritics=obj.get('drop_diacritics', False),
+                   utfnorm=obj.get('utfnorm', False),
+                   utfnorm_type=obj.get('utfnorm_type', False),
+                   preprocessor=obj.get('preprocessor'),
+                   name=obj['name'], meta=obj.get('meta', {}),
+                   tokenizer_class=obj["tokenizer_class"], tokenizer_params=obj["tokenizer_params"]
+                   )
+
+        inst.tokenizer.from_str(obj["tokenizer_dump"])
+        #  to_str(pretty=False)
+        inst.fitted = True
+
+        return inst
+
+
 class MultiLabelEncoder(object):
     """
     Complex Label encoder for all tasks.
@@ -338,11 +516,21 @@ class MultiLabelEncoder(object):
     def __init__(self, word_max_size=None, word_min_freq=1, word_lower=False,
                  char_max_size=None, char_min_freq=None, char_lower=False,
                  char_eos=True, char_bos=True, utfnorm=False, utfnorm_type='NFKD',
-                 drop_diacritics=False, noise_strategies = None):
-        self.word = LabelEncoder(max_size=word_max_size, min_freq=word_min_freq,
-                                 lower=word_lower, utfnorm=utfnorm,
-                                 utfnorm_type=utfnorm_type,
-                                 drop_diacritics=drop_diacritics, name='word')
+                 drop_diacritics=False, noise_strategies=None,
+                 word_tokenizer: str = "word"):
+
+        if word_tokenizer == "word":
+            self.word = LabelEncoder(max_size=word_max_size, min_freq=word_min_freq,
+                                     lower=word_lower, utfnorm=utfnorm,
+                                     utfnorm_type=utfnorm_type,
+                                     drop_diacritics=drop_diacritics, name='word')
+        elif word_tokenizer.startswith("hugginface:"):
+            self.word: HugginfaceEncoder = HugginfaceEncoder(
+                lower=word_lower, name="bpe",
+                class_name=word_tokenizer.replace("hugginface:", "")
+            )
+        else:
+            raise ValueError(f"Tokenizer {word_tokenizer} is unknown.")
         self.char = LabelEncoder(max_size=char_max_size, min_freq=char_min_freq,
                                  level='char', lower=char_lower, name='char',
                                  eos=char_eos, bos=char_bos, utfnorm_type=utfnorm_type,
