@@ -180,6 +180,13 @@ class LabelEncoder(object):
                 inp
             )
         ))
+        if self.max_size:
+            t = len(self.inverse_table)
+            r = len(self.reserved)
+            if (self.max_size - t - r) > 0:
+                new_chars = new_chars[:min(len(new_chars), self.max_size-t-r)]
+            else:
+                return # We have too much in the vocab already
         self.inverse_table.extend(new_chars)
         self.table = {sym: idx for idx, sym in enumerate(self.inverse_table)}
 
