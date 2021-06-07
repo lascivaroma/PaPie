@@ -1,4 +1,3 @@
-
 import warnings
 from functools import partial
 import tarfile
@@ -11,11 +10,18 @@ except ImportError:
 import logging
 from collections import Counter, defaultdict
 import random
+from typing import Dict, List, Union, Tuple, Any
 
 import torch
 
 from pie import utils, torch_utils, constants
 from . import preprocessors
+
+# Typing utilities
+Sentence = List[str]
+TaskName = str
+Label = str
+DictGT = Dict[TaskName, List[Label]]
 
 
 class LabelEncoder(object):
@@ -160,6 +166,29 @@ class LabelEncoder(object):
         self.inverse_table = list(self.reserved) + [sym for sym, _ in most_common]
         self.table = {sym: idx for idx, sym in enumerate(self.inverse_table)}
         self.fitted = True
+
+    def register_upper(self):
+        """ Params registers the same vocabulary but in full uppercase
+
+        Important when using the upper strategy
+        """
+        inp = self.inverse_table[len(self.reserved):]
+        new_chars = list(map(
+            lambda x: x.upper(),
+            filter(
+                lambda x: x.islower() and x.upper() not in inp,
+                inp
+            )
+        ))
+        if self.max_size:
+            t = len(self.inverse_table)
+            r = len(self.reserved)
+            if (self.max_size - t - r) > 0:
+                new_chars = new_chars[:min(len(new_chars), self.max_size-t-r)]
+            else:
+                return # We have too much in the vocab already
+        self.inverse_table.extend(new_chars)
+        self.table = {sym: idx for idx, sym in enumerate(self.inverse_table)}
 
     def preprocess_text(self, seq):
         """
@@ -309,7 +338,7 @@ class MultiLabelEncoder(object):
     def __init__(self, word_max_size=None, word_min_freq=1, word_lower=False,
                  char_max_size=None, char_min_freq=None, char_lower=False,
                  char_eos=True, char_bos=True, utfnorm=False, utfnorm_type='NFKD',
-                 drop_diacritics=False):
+                 drop_diacritics=False, noise_strategies = None):
         self.word = LabelEncoder(max_size=word_max_size, min_freq=word_min_freq,
                                  lower=word_lower, utfnorm=utfnorm,
                                  utfnorm_type=utfnorm_type,
@@ -320,6 +349,7 @@ class MultiLabelEncoder(object):
                                  utfnorm=utfnorm, drop_diacritics=drop_diacritics)
         self.tasks = {}
         self.nsents = None
+        self.noise_strategies = noise_strategies or {}
 
     def __repr__(self):
         return (
@@ -364,7 +394,8 @@ class MultiLabelEncoder(object):
                  char_bos=settings.char_bos,
                  utfnorm=settings.utfnorm,
                  utfnorm_type=settings.utfnorm_type,
-                 drop_diacritics=settings.drop_diacritics)
+                 drop_diacritics=settings.drop_diacritics,
+                 noise_strategies=settings.noise_strategies)
 
         for task in settings.tasks:
             if tasks is not None and task['settings']['target'] not in tasks:
@@ -394,6 +425,11 @@ class MultiLabelEncoder(object):
 
         self.word.compute_vocab()
         self.char.compute_vocab()
+
+        if self.noise_strategies["uppercase"]["apply"]:
+            self.word.register_upper()
+            self.char.register_upper()
+
         for le in self.tasks.values():
             le.compute_vocab()
 
@@ -405,7 +441,7 @@ class MultiLabelEncoder(object):
         """
         return self.fit(line for (_, line) in reader.readsents(silent=False))
 
-    def transform(self, sents):
+    def transform(self, sents: Union[List[Sentence], List[Tuple[Sentence, DictGT]]]):
         """
         Parameters
         ===========
@@ -566,7 +602,7 @@ class Dataset(object):
             else:
                 yield packed
 
-    def batch_generator(self, return_raw=False):
+    def _batch_generator_cached(self, return_raw=False):
         """
         Generator over dataset batches. Each batch is a tuple of (input, tasks):
             * (word, char)
@@ -589,6 +625,63 @@ class Dataset(object):
                     yield batch
         else:
             yield from self.batch_generator_(return_raw=return_raw)
+
+    def _get_noised_batch(self, raw_words, raw_targets, apply_noise: Dict[str, Dict[str, Any]]):
+        """
+
+        """
+        raw_words = list(raw_words)  # Was a Tuple before
+
+        # Run N strategies per N sentences rand on the range [0.00:1.00(
+        apply_strategies = torch.rand(len(apply_noise), len(raw_words))
+
+        # Iterate over strategies
+        for strat_id, (strat_name, strategy) in enumerate(apply_noise.items()):
+            targets = (apply_strategies[strat_id] < strategy.get("ratio", 0)).nonzero(as_tuple=True)
+
+            if not len(targets):
+                continue
+
+            changed_index = targets[0].tolist()
+
+            for index, sent, truth in zip(
+                    changed_index,
+                    map(raw_words.__getitem__, changed_index),
+                    map(raw_targets.__getitem__, changed_index)
+            ):
+                raw_words[index] = getattr(NoiseStrategies, strat_name)(
+                    sent,
+                    tasks=changed_index,
+                    **strategy.get("params", {})
+                )
+
+        # Recreate a batch
+        return self.pack_batch(list(zip(raw_words, raw_targets)), device=self.device)
+
+    def batch_generator(self, return_raw=False, apply_noise=None):
+        """
+        Generator over dataset batches. Each batch is a tuple of (input, tasks):
+            * (word, char)
+                - word : tensor(length, batch_size), padded lengths
+                - char : tensor(length, batch_size * words), padded lengths
+            * (tasks) dictionary with tasks
+        """
+        if apply_noise or return_raw:
+            for batch, raw in self._batch_generator_cached(return_raw=True):
+                if apply_noise:  # If we need to apply noise
+                    batch = self._get_noised_batch(*raw, apply_noise=apply_noise)
+                if return_raw:
+                    # Batch = ((word, wlen), (char, clen)), tasks
+                    # Raw Tuple[List[words], Tuple[Dict[task, List[gold]]...]]
+                    # For each strategy
+                        # Index = list(range(0, len(raw[0])+1), get N random
+                        # Then for each index, -> strategy(raw[0][1])
+                        # Batch[0] -> apply on word and char reusing index
+                    yield batch, raw
+                else:
+                    yield batch
+        else:
+            yield from self._batch_generator_cached(return_raw=False)
 
     def batch_generator_(self, return_raw=False):
         buf = []
@@ -651,3 +744,9 @@ class device_wrapper(object):
 
     def __len__(self):
         return len(self.batches)
+
+
+class NoiseStrategies:
+    @staticmethod
+    def uppercase(inp: Sentence, tasks: DictGT = None, **kwargs) -> List[str]:
+        return list(map(str.upper, inp))

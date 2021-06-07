@@ -231,6 +231,13 @@ class Trainer(object):
             delay=settings.lr_scheduler_delay,
             **settings.lr_scheduler_params)
 
+        self.noise_strategies = settings.noise_strategies or {}
+        self.noise_strategies = {
+            strategy_name: strategy
+            for strategy_name, strategy in self.noise_strategies.items()
+            if isinstance(strategy, dict) and strategy.get("apply") is True
+        }
+
         if settings.verbose:
             print()
             print("Evaluation check every {}/{} batches".format(
@@ -339,7 +346,7 @@ class Trainer(object):
         rep_items, rep_start = 0, time.time()
         scores = None
 
-        for b, batch in enumerate(self.dataset.batch_generator()):
+        for b, batch in enumerate(self.dataset.batch_generator(apply_noise=self.noise_strategies)):
             # get loss
             loss = self.model.loss(batch, get_batch_task(self.model.tasks.values()))
 

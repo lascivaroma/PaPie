@@ -161,5 +161,14 @@
   "hidden_size": 300, // sentence encoding dimension
   "num_layers": 1, // num recurrent layers for the sentence encoder
   "cell": "LSTM", // cell type for rnns
-  "init_rnn": "default" // initializing RNNs (default, xavier_uniform, orthogonal)
+  "init_rnn": "default", // initializing RNNs (default, xavier_uniform, orthogonal)
+
+
+   "noise_strategies": {
+     "uppercase": {
+       "apply": false,
+       "ratio": 0.10,
+       "params": {}
+     }
+   }
 }
