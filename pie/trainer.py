@@ -237,7 +237,6 @@ class Trainer(object):
             for strategy_name, strategy in self.noise_strategies.items()
             if isinstance(strategy, dict) and strategy.get("apply") is True
         }
-        print(self.noise_strategies)
 
         if settings.verbose:
             print()
