@@ -374,7 +374,7 @@ class SimpleModel(BaseModel):
 
         return output
 
-    def predict(self, inp, *tasks, return_probs=False,
+    def _subword_predict(self, inp, *tasks, return_probs=False,
                 use_beam=False, beam_width=10, **kwargs):
         """
         inp : (word, wlen), (char, clen), text input
@@ -382,8 +382,77 @@ class SimpleModel(BaseModel):
         """
         tasks = set(self.tasks if not len(tasks) else tasks)
         preds, probs = {}, {}
-        (word, wlen), (char, clen) = inp
-        wlen, subwlen = wlen
+
+        ((word, wlen, subwlen, alignment), (char, clen)) = inp
+
+        # Embedding
+        emb, (wemb, cemb, cemb_outs) = self.embedding(word, wlen, char, clen)
+
+        # Encoder
+        enc_outs = None
+        if self.encoder is not None:
+            # TODO: check if we need encoder for this particular batch
+            enc_outs = self.encoder(emb, wlen)
+
+        aligned_enc_outs = {}
+
+        # Decoders
+        for task in tasks:
+            decoder, at_layer = self.decoders[task], self.tasks[task]['layer']
+            (target, length), at_layer = tasks[task], self.tasks[task]['layer']
+            if at_layer not in aligned_enc_outs:
+                aligned_enc_outs[at_layer] = self._align_subword_to_words(
+                    enc_outs[at_layer], wlen=wlen, last_dim=enc_outs[at_layer].shape[-1],
+                    alignment=alignment
+                )
+
+            outs = None
+            if enc_outs is not None:
+                outs = enc_outs[at_layer]
+
+            if self.label_encoder.tasks[task].level.lower() == 'char':
+                if isinstance(decoder, LinearDecoder):
+                    hyps, prob = decoder.predict(cemb_outs, clen)
+                elif isinstance(decoder, CRFDecoder):
+                    hyps, prob = decoder.predict(cemb_outs, clen)
+                else:
+                    context = get_context(outs, wemb, wlen, self.tasks[task]['context'])
+                    if use_beam:
+                        hyps, prob = decoder.predict_beam(
+                            cemb_outs, clen, width=beam_width, context=context)
+                    else:
+                        hyps, prob = decoder.predict_max(
+                            cemb_outs, clen, context=context)
+                    if self.label_encoder.tasks[task].preprocessor_fn is None:
+                        hyps = [''.join(hyp) for hyp in hyps]
+            else:
+                if isinstance(decoder, LinearDecoder):
+                    hyps, prob = decoder.predict(outs, wlen)
+                elif isinstance(decoder, CRFDecoder):
+                    hyps, prob = decoder.predict(outs, wlen)
+
+            preds[task] = hyps
+            probs[task] = prob
+
+        if return_probs:
+            return preds, probs
+
+        return preds
+
+    def predict(self, inp, *tasks, return_probs=False,
+                use_beam=False, beam_width=10, **kwargs):
+        """
+        inp : (word, wlen), (char, clen), text input
+        tasks : list of str, target tasks
+        """
+        if self.label_encoder.word.type == "subword":
+            return self._subword_predict(inp, *tasks, return_probs=return_probs,
+                                         use_beam=use_beam, beam_width=beam_width,
+                                         **kwargs)
+
+        tasks = set(self.tasks if not len(tasks) else tasks)
+        preds, probs = {}, {}
+        (word, wlen, *_), (char, clen) = inp
 
         # Embedding
         emb, (wemb, cemb, cemb_outs) = self.embedding(word, wlen, char, clen)
