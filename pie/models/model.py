@@ -386,20 +386,19 @@ class SimpleModel(BaseModel):
         ((word, wlen, subwlen, alignment), (char, clen)) = inp
 
         # Embedding
-        emb, (wemb, cemb, cemb_outs) = self.embedding(word, wlen, char, clen)
+        emb, (wemb, cemb, cemb_outs) = self.embedding(word, subwlen, char, clen)
 
         # Encoder
         enc_outs = None
         if self.encoder is not None:
             # TODO: check if we need encoder for this particular batch
-            enc_outs = self.encoder(emb, wlen)
+            enc_outs = self.encoder(emb, subwlen)
 
         aligned_enc_outs = {}
 
         # Decoders
         for task in tasks:
             decoder, at_layer = self.decoders[task], self.tasks[task]['layer']
-            (target, length), at_layer = tasks[task], self.tasks[task]['layer']
             if at_layer not in aligned_enc_outs:
                 aligned_enc_outs[at_layer] = self._align_subword_to_words(
                     enc_outs[at_layer], wlen=wlen, last_dim=enc_outs[at_layer].shape[-1],
@@ -408,7 +407,7 @@ class SimpleModel(BaseModel):
 
             outs = None
             if enc_outs is not None:
-                outs = enc_outs[at_layer]
+                outs = aligned_enc_outs[at_layer]
 
             if self.label_encoder.tasks[task].level.lower() == 'char':
                 if isinstance(decoder, LinearDecoder):
