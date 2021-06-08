@@ -959,7 +959,12 @@ def pack_batch(label_encoder, batch, device=None):
     """
     (word, char, wlen, alignment), tasks = label_encoder.transform(batch)
     word = EncodedWordBatch(*torch_utils.pad_batch(word, label_encoder.word.get_pad(), device=device))
-    char = torch_utils.pad_batch(char, label_encoder.char.get_pad(), device=device)
+    # Char: (max_[sub]word_size, batch_size*nb_[sub]word)
+    char: Tuple[torch.TensorType, torch.TensorType] = torch_utils.pad_batch(
+        char,
+        label_encoder.char.get_pad(),
+        device=device
+    )
 
     if label_encoder.word.type == "subword":
         word = EncodedWordBatch(

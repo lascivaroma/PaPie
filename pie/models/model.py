@@ -360,6 +360,7 @@ class SimpleModel(BaseModel):
 
         # (LM)
         if self.include_lm:
+            print(enc_outs[0].shape)
             if len(emb) > 1:  # can't compute loss for 1-length batches
                 # always at first layer
                 fwd, bwd = F.dropout(
