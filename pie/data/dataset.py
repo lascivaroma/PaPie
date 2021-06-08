@@ -443,7 +443,7 @@ class HugginfaceEncoder(LabelEncoder):
             if self.eos:
                 s.append(self.eos)
 
-            encoded = self._tokenizer.encode(s, is_pretokenized=True, add_special_tokens=False)
+            encoded = self._tokenizer.encode(s, is_pretokenized=True, add_special_tokens=True)
             output.extend(encoded.ids)
             return output, encoded.word_ids, encoded.tokens
 
