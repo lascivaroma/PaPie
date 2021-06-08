@@ -130,6 +130,7 @@ class RNNEmbedding(nn.Module):
         # (2 x batch x hidden) - > (batch x 2 * hidden)
         emb = emb.transpose(0, 1).contiguous().view(len(nchars), -1)
         # (batch x 2 * hidden) -> (nwords x batch x 2 * hidden)
+        # print("EMB", emb)
         emb = torch_utils.pad_flat_batch(emb, nwords, maxlen=max(nwords).item())
 
         return emb, outs
@@ -215,9 +216,6 @@ if __name__ == '__main__':
     settings = settings_from_file('./config.json')
     data = Dataset(settings)
     ((word, wlen), (char, clen)), tasks = next(data.batch_generator())
-    print("lemma", tasks['lemma'][0].size(), tasks['lemma'][1])
-    print("char", char.size(), clen)
-    print("word", word.size(), wlen)
 
     emb_dim = 20
     wemb = nn.Embedding(len(data.label_encoder.word), emb_dim)

@@ -1,7 +1,8 @@
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from typing import List
 
 from pie import torch_utils, initialization
 
@@ -212,8 +213,108 @@ class SimpleModel(BaseModel):
         if self.include_lm:
             pass
 
+    def _align_subword_to_words(
+            self,
+            encoding: torch.TensorType,
+            wlen: torch.TensorType,
+            last_dim: int,
+            alignment: List[torch.TensorType]):
+
+        # LOSS
+        batch_size = len(wlen)
+        max_words = wlen.max()
+
+        out: torch.Tensor = torch.zeros(  # Inverse of input (WLen,BatchSize,HiddenDim)
+            batch_size,  # Batch Size
+            max_words,  # Number of words
+            last_dim,  # Hidden dim
+            device=encoding.device
+        )
+        reshaped = encoding.view(batch_size, len(encoding), last_dim)
+        for batch_ix, (align_vector, sentence) in enumerate(zip(alignment, reshaped)):
+            out[batch_ix] += out[batch_ix].index_add(dim=0, index=align_vector, source=sentence[:len(align_vector), :])
+        out = out.view(max_words, batch_size, last_dim)
+        return out
+
+    def _subword_loss(self, batch_data, *target_tasks):
+        ((word, wlen, subwlen, alignment), (char, clen)), tasks = batch_data
+
+        output = {}
+
+        # Embedding
+        emb, (wemb, cemb, cemb_outs) = self.embedding(word, subwlen, char, clen)
+
+        # Encoder
+        emb = F.dropout(emb, p=self.dropout, training=self.training)
+        enc_outs = None
+        if self.encoder is not None:
+            # TODO: check if we need encoder for this particular batch
+            enc_outs = self.encoder(emb, subwlen)
+
+        aligned_enc_outs = {}
+
+        # Decoder
+        for task in target_tasks:
+            (target, length), at_layer = tasks[task], self.tasks[task]['layer']
+            if at_layer not in aligned_enc_outs:
+                aligned_enc_outs[at_layer] = self._align_subword_to_words(
+                    enc_outs[at_layer], wlen=wlen, last_dim=enc_outs[at_layer].shape[-1],
+                    alignment=alignment
+                )
+
+            # prepare input layer
+            outs = None
+            if enc_outs is not None:
+                outs = F.dropout(aligned_enc_outs[at_layer], p=0, training=self.training)
+
+            decoder = self.decoders[task]
+
+            if self.tasks[task]['level'].lower() == 'char':
+                if isinstance(decoder, LinearDecoder):
+                    logits = decoder(cemb_outs)
+                    output[task] = decoder.loss(logits, target)
+                elif isinstance(decoder, CRFDecoder):
+                    logits = decoder(cemb_outs)
+                    output[task] = decoder.loss(logits, target, length)
+                elif isinstance(decoder, AttentionalDecoder):
+                    cemb_outs = F.dropout(
+                        cemb_outs, p=self.dropout, training=self.training)
+
+                    context = get_context(outs, wemb, subwlen, self.tasks[task]['context'])
+                    print(cemb_outs.shape, context.shape)
+                    # self._align_subword_to_words(context)
+                    logits = decoder(target, length, cemb_outs, clen, context=context)
+                    output[task] = decoder.loss(logits, target)
+            else:
+                if isinstance(decoder, LinearDecoder):
+                    logits = decoder(outs)
+                    output[task] = decoder.loss(logits, target)
+                elif isinstance(decoder, CRFDecoder):
+                    logits = decoder(outs)
+                    output[task] = decoder.loss(logits, target, length)
+
+        # (LM)
+        if self.include_lm:
+            if len(emb) > 1:  # can't compute loss for 1-length batches
+                # always at first layer
+                fwd, bwd = F.dropout(
+                    enc_outs[0], p=0, training=self.training
+                ).chunk(2, dim=2)
+                # forward logits
+                logits = self.lm_fwd_decoder(torch_utils.pad(fwd[:-1], pos='pre'))
+                output['lm_fwd'] = self.lm_fwd_decoder.loss(logits, word)
+                # backward logits
+                logits = self.lm_bwd_decoder(torch_utils.pad(bwd[1:], pos='post'))
+                output['lm_bwd'] = self.lm_bwd_decoder.loss(logits, word)
+
+        return output
+
     def loss(self, batch_data, *target_tasks):
-        ((word, wlen), (char, clen)), tasks = batch_data
+        if self.label_encoder.word.type == "subword":
+            return self._subword_loss(batch_data, *target_tasks)
+
+        ((word, wlen, *_), (char, clen)), tasks = batch_data
+
         output = {}
 
         # Embedding
@@ -282,6 +383,7 @@ class SimpleModel(BaseModel):
         tasks = set(self.tasks if not len(tasks) else tasks)
         preds, probs = {}, {}
         (word, wlen), (char, clen) = inp
+        wlen, subwlen = wlen
 
         # Embedding
         emb, (wemb, cemb, cemb_outs) = self.embedding(word, wlen, char, clen)

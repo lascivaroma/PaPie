@@ -10,7 +10,7 @@ except ImportError:
 import logging
 from collections import Counter, defaultdict
 import random
-from typing import Dict, Any, List, Set, Union, Tuple
+from typing import Dict, Any, List, Set, Union, Tuple, Optional
 
 import tokenizers
 from tokenizers.pre_tokenizers import Whitespace
@@ -58,6 +58,8 @@ class LabelEncoder(object):
         self.max_size = max_size
         self.min_freq = min_freq
         self.level = level.lower()
+        if self.level == "token" and target is None:
+            self.type = "word"
         self.target = target
         self.name = name
         self.reserved = reserved + (constants.UNK,)  # always use <unk>
@@ -67,6 +69,10 @@ class LabelEncoder(object):
         self.table = None
         self.inverse_table = None
         self.fitted = False
+
+    @property
+    def label(self):
+        return "default"
 
     def _get_text_preprocess_fn(self, lower, utfnorm, utfnorm_type, drop_diacritics):
         fns = []
@@ -117,7 +123,7 @@ class LabelEncoder(object):
             self.name, self.lower, self.utfnorm, self.utfnorm_type,
             self.target, self.level, length, self.fitted)
 
-    def get_type_stats(self):
+    def get_type_stats(self) -> Tuple[int, int, float]:
         """
         Compute number of known types, total number of types and ratio
         """
@@ -128,7 +134,7 @@ class LabelEncoder(object):
         known_types = len(self) - len(self.reserved)
         return known_types, total_types, known_types / total_types
 
-    def get_token_stats(self):
+    def get_token_stats(self) -> Tuple[int, int, float]:
         """
         Compute number of known tokens, total number of types and ratio
         """
@@ -346,7 +352,7 @@ class HugginfaceEncoder(LabelEncoder):
                  # Not used right now
                  preprocessor=None, max_size=None, min_freq=1,
                  pad=True, eos=False, bos=False, unk=None, reserved=(),
-                 tokenizer_class: str = "Unigram", tokenizer_params: Dict[str, Any] = None,
+                 model: str = "Unigram",
                  **meta):
 
         if level.lower() not in ('token', 'char'):
@@ -357,8 +363,9 @@ class HugginfaceEncoder(LabelEncoder):
         self.max_size = max_size
         self.level = level.lower()
         self.name = name
+        self.type = "subword"
 
-        self.unk = constants.UNK if unk else None
+        self.unk = constants.UNK
         self.pad = constants.PAD if pad else None
         self.eos = constants.EOS if eos else None
         self.bos = constants.BOS if bos else None
@@ -379,20 +386,23 @@ class HugginfaceEncoder(LabelEncoder):
         if self.lower:
             norms.append(normalizers.Lowercase())
 
-        self.normalizers = normalizers.Sequence()
-
-
-        self._tokenizer_cls: str = tokenizer_class
-        self._tokenizer: tokenizers.Tokenizer = tokenizers.Tokenizer(getattr(models, self._tokenizer_cls))
+        # Sequence
+        self.normalizers = normalizers.Sequence(norms)
+        self._model: str = model
+        self._tokenizer: tokenizers.Tokenizer = tokenizers.Tokenizer(
+            getattr(models, self._model)()  # Get the class from self._model, then initiate the object
+        )
         self._tokenizer.pre_tokenizer = Whitespace()
         self._tokenizer.normalizer = self.normalizers
-
-        self._tokenizer_params = tokenizer_params
 
         self._table: Dict[str, int] = {}
         self._known_tokens: Set[str] = set()
 
         self.fitted = False
+
+    @property
+    def label(self):
+        return f"hugginface:{self._model}"
 
     @property
     def known_tokens(self):
@@ -412,7 +422,7 @@ class HugginfaceEncoder(LabelEncoder):
 
     @property
     def tokenizer(self):
-        return self._tokenizer.model
+        return self._tokenizer
 
     @property
     def table(self) -> Dict[str, int]:
@@ -422,26 +432,25 @@ class HugginfaceEncoder(LabelEncoder):
             self._table = self.tokenizer.get_vocab()
         return self._table
 
-    def transform(self, seq, rseq=None):
+    def transform(self, seq, rseq=None) -> Tuple[List[int], List[int], List[str]]:
         if not self.fitted:
             raise ValueError("Vocabulary hasn't been computed yet")
 
         def transform_seq(s):
             output = []
             if self.bos:
-                output.append(self.get_bos())
-
-            output.extend(self._tokenizer.encode(s, is_pretokenized=True, add_special_tokens=False).ids)
-
+                s = [self.bos] + s
             if self.eos:
-                output.append(self.get_eos())
+                s.append(self.eos)
 
-            return output
-
-        # preprocess
-        seq = self.preprocess(seq, rseq)
+            encoded = self._tokenizer.encode(s, is_pretokenized=True, add_special_tokens=False)
+            output.extend(encoded.ids)
+            return output, encoded.word_ids, encoded.tokens
 
         return transform_seq(seq)
+
+    def decode(self, seq):
+        return self._tokenizer.decode(seq, skip_special_tokens=True)
 
     def compute_vocab(self):
         self.fitted = True
@@ -452,46 +461,58 @@ class HugginfaceEncoder(LabelEncoder):
             raise ValueError("Encoder already fitted")
         return True
 
-    def train(self, datasets: List[str]):
-        # train on datasets
+    def register_upper(self):
+        pass
 
+    def train(self, datasets: List[str], verbose: bool = True):
+        """ Train on datasets of raw texts
+
+        :param datasets: List of filepath (plaintext)
+        :param verbose: Display training progress
+        """
         trainer = type(self.model.get_trainer())(
             vocab_size=self.max_size,
-            show_progress=True,
+            show_progress=verbose,
             unk_token=self.unk,
-            pad_token=self.pad,
             special_tokens=[self.unk, self.pad]
         )
         self.tokenizer.train(datasets, trainer=trainer)
         return
 
+    def train_or_load(
+            self,
+            datasets: Optional[List[str]] = None,
+            pretrain_path: Optional[str] = None,
+            verbose: bool = True
+    ):
+        if datasets:
+            print("--> Training ")
+            self.train(datasets=datasets, verbose=verbose)
+        elif pretrain_path:
+            print(f"--> Loading from {pretrain_path}")
+            self._tokenizer = self.tokenizer.from_file(pretrain_path)
+        else:
+            raise ValueError("A Hugginface Tokenizer is used but no datasets or pre-trained model were given.")
+
     def _get_sym(self, sym):
         if not self.fitted:
             raise ValueError()
+        return self.tokenizer.token_to_id(sym)
 
-    # save and from_json
-    """
-    from tokenizers import Tokenizer
-    from tokenizers.pre_tokenizers import Whitespace
-    from tokenizers.models import Unigram, BPE
-    from tokenizers import normalizers
-    from tokenizers.normalizers import Lowercase, NFD, StripAccents
-    
-    model = Unigram()
-    tokenizer = Tokenizer(model)
-    tokenizer.pre_tokenizer = Whitespace()
-    tokenizer.normalizer = normalizers.Sequence([NFD(), Lowercase(), StripAccents()])
-    
-    trainer = model.get_trainer().__class__(vocab_size=8000, show_progress=True, unk_token="[UNK]",
-                                            pad_token="[PAD]",
-                                            special_tokens=["[UNK]", "[PAD]"])
-    tokenizer.train(["full.txt"], trainer=trainer)
-    # UnigramTrainer(self, vocab_size=8000, show_progress=True, special_tokens=[])
-    """
+    def jsonify(self):
+        if not self.fitted:
+            raise ValueError("Attempted to serialize unfitted encoder")
+
+        j = super(HugginfaceEncoder, self).jsonify()
+        j.update({
+            "model": self._model,  # Class for Hugginface tokenizers.models
+            "model_dump": self.tokenizer.to_str()
+        })
+        return
 
     @classmethod
     def from_json(cls, obj):
-        inst = cls(pad=obj['pad'], eos=obj['eos'], bos=obj['bos'],
+        inst = cls(pad=obj['pad'], eos=obj['eos'], bos=obj['bos'], unk=obj.get('unk'),
                    level=obj['level'], target=obj['target'], lower=obj['lower'],
                    max_size=obj['max_size'], min_freq=obj['min_freq'],
                    drop_diacritics=obj.get('drop_diacritics', False),
@@ -499,14 +520,26 @@ class HugginfaceEncoder(LabelEncoder):
                    utfnorm_type=obj.get('utfnorm_type', False),
                    preprocessor=obj.get('preprocessor'),
                    name=obj['name'], meta=obj.get('meta', {}),
-                   tokenizer_class=obj["tokenizer_class"], tokenizer_params=obj["tokenizer_params"]
+                   model=obj["model"]
                    )
 
-        inst.tokenizer.from_str(obj["tokenizer_dump"])
+        inst.tokenizer.from_str(obj["model_dump"])
         #  to_str(pretty=False)
         inst.fitted = True
 
         return inst
+
+    def get_type_stats(self):
+        """
+        Compute number of known types, total number of types and ratio
+        """
+        if not self.fitted:
+            raise ValueError("Vocabulary hasn't been computed yet")
+
+        return self.max_size, self.max_size, 1.0
+
+    def get_token_stats(self):
+        return self.max_size, self.max_size, 1.0
 
 
 class MultiLabelEncoder(object):
@@ -517,20 +550,24 @@ class MultiLabelEncoder(object):
                  char_max_size=None, char_min_freq=None, char_lower=False,
                  char_eos=True, char_bos=True, utfnorm=False, utfnorm_type='NFKD',
                  drop_diacritics=False, noise_strategies=None,
-                 word_tokenizer: str = "word"):
+                 word_encoder: str = "default"):
 
-        if word_tokenizer == "word":
+        if word_encoder == "default":
             self.word = LabelEncoder(max_size=word_max_size, min_freq=word_min_freq,
                                      lower=word_lower, utfnorm=utfnorm,
                                      utfnorm_type=utfnorm_type,
                                      drop_diacritics=drop_diacritics, name='word')
-        elif word_tokenizer.startswith("hugginface:"):
+        elif word_encoder.startswith("hugginface:"):
             self.word: HugginfaceEncoder = HugginfaceEncoder(
-                lower=word_lower, name="bpe",
-                class_name=word_tokenizer.replace("hugginface:", "")
+                max_size=word_max_size,
+                lower=word_lower, utfnorm=utfnorm, utfnorm_type=utfnorm_type,
+                drop_diacritics=drop_diacritics,
+                name=word_encoder.replace("hugginface:", ""),
+                model=word_encoder.replace("hugginface:", "")
             )
         else:
-            raise ValueError(f"Tokenizer {word_tokenizer} is unknown.")
+            raise ValueError(f"Tokenizer {word_encoder} is unknown.")
+
         self.char = LabelEncoder(max_size=char_max_size, min_freq=char_min_freq,
                                  level='char', lower=char_lower, name='char',
                                  eos=char_eos, bos=char_bos, utfnorm_type=utfnorm_type,
@@ -583,7 +620,8 @@ class MultiLabelEncoder(object):
                  utfnorm=settings.utfnorm,
                  utfnorm_type=settings.utfnorm_type,
                  drop_diacritics=settings.drop_diacritics,
-                 noise_strategies=settings.noise_strategies)
+                 noise_strategies=settings.noise_strategies,
+                 word_encoder=settings.get("word_encoder", {}).get("type", "default"))
 
         for task in settings.tasks:
             if tasks is not None and task['settings']['target'] not in tasks:
@@ -644,18 +682,25 @@ class MultiLabelEncoder(object):
                 character level
             - task_dict: Dict to corresponding integer output for each task
         """
-        word, char, tasks_dict = [], [], defaultdict(list)
+        word, char, wlen, word_alignments, tasks_dict = [], [], [], [], defaultdict(list)
 
         for inp in sents:
             tasks = None
-
             # task might not be passed
             if isinstance(inp, tuple):
                 inp, tasks = inp
 
             # input data
-            word.append(self.word.transform(inp))
-            char.extend(self.char.transform(inp))
+            if self.word.type == "subword":
+                w, w_alignement, subtokens = self.word.transform(inp)
+                word.append(w)
+                word_alignments.append(w_alignement)
+                char.extend(self.char.transform(subtokens))
+                wlen.append(len(inp))
+            else:
+                word.append(self.word.transform(inp))
+                char.extend(self.char.transform(inp))
+                wlen.append(len(inp))
 
             # task data
             if tasks is None:
@@ -670,10 +715,11 @@ class MultiLabelEncoder(object):
                 else:
                     tasks_dict[le.name].append(task_data)
 
-        return (word, char), tasks_dict
+        return (word, char, wlen, word_alignments), tasks_dict
 
     def jsonify(self):
         return {'word': self.word.jsonify(),
+                'word_type': self.word.label,
                 'char': self.char.jsonify(),
                 'tasks': {le.name: le.jsonify() for le in self.tasks.values()}}
 
@@ -683,7 +729,11 @@ class MultiLabelEncoder(object):
 
     @staticmethod
     def _init(inst, obj):
-        inst.word = LabelEncoder.from_json(obj['word'])
+        if obj.get("wordtype", "default") == "default":
+            inst.word = LabelEncoder.from_json(obj['word'])
+        else:
+            inst.word = HugginfaceEncoder.from_json(obj['word'])
+
         inst.char = LabelEncoder.from_json(obj['char'])
 
         for task, le in obj['tasks'].items():
@@ -895,14 +945,36 @@ class Dataset(object):
             self.cached.append((batch, raw))
 
 
+
+from collections import namedtuple
+
+
+EncodedWordBatch = namedtuple("EncodedWordBatch", ["word", "wlen", "subwlen", "alignment"],
+                              defaults=[None, None, None, None])
+
+
 def pack_batch(label_encoder, batch, device=None):
     """
     Transform batch data to tensors
     """
-    (word, char), tasks = label_encoder.transform(batch)
-
-    word = torch_utils.pad_batch(word, label_encoder.word.get_pad(), device=device)
+    (word, char, wlen, alignment), tasks = label_encoder.transform(batch)
+    word = EncodedWordBatch(*torch_utils.pad_batch(word, label_encoder.word.get_pad(), device=device))
     char = torch_utils.pad_batch(char, label_encoder.char.get_pad(), device=device)
+
+    if label_encoder.word.type == "subword":
+        word = EncodedWordBatch(
+            word=word.word,
+            wlen=torch.tensor(wlen, dtype=torch.int64, device=device),
+            subwlen=word.wlen,
+            # ToDo: find a way to pad the alignment torch index (knowing that 0 = index 0
+            # x_padded = pad_sequence(x_seq, batch_first=True, padding_value=0)
+            alignment=[torch.tensor(align, device=device) for align in alignment]#torch_utils.pad_batch(
+               # alignment,
+               # padding_id=-1,
+               # device=device,
+               # return_lengths=False
+            #)
+        )
 
     output_tasks = {}
     for task, data in tasks.items():
@@ -918,6 +990,8 @@ def wrap_device(it, device):
             yield i.to(device)
         elif isinstance(i, dict):
             yield {k: tuple(wrap_device(v, device)) for k, v in i.items()}
+        elif i is None:
+            yield None
         else:
             yield tuple(wrap_device(i, device))
 

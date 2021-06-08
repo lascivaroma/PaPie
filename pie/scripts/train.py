@@ -63,6 +63,14 @@ def run(settings):
         print()
     label_encoder.fit_reader(reader)
 
+    if settings.verbose and label_encoder.word.label.startswith("hugginface:"):
+        print(f"::: Training/Loading Tokenizer {label_encoder.word.label} :::")
+        print()
+        label_encoder.word.train_or_load(
+            datasets=settings.word_encoder.get("training_set", None),
+            pretrain_path=settings.word_encoder.get("pretrain_path", [])
+        )
+
     if settings.verbose:
         print()
         print("::: Vocabulary :::")
