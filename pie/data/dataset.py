@@ -10,7 +10,8 @@ except ImportError:
 import logging
 from collections import Counter, defaultdict
 import random
-from typing import Dict, Any, List, Set, Union, Tuple, Optional
+from typing import Dict, Any, List, Set, Union, Tuple, Optional, NamedTuple
+from collections import namedtuple
 
 import tokenizers
 from tokenizers.pre_tokenizers import Whitespace
@@ -26,6 +27,24 @@ Sentence = List[str]
 TaskName = str
 Label = str
 DictGT = Dict[TaskName, List[Label]]
+
+
+# Utilities
+class EncoderOutput(NamedTuple):
+    content: Union[torch.TensorType, List[int]]
+    length: Optional[Union[torch.TensorType, List[int]]] = None
+    is_subword: bool = False
+    is_task: bool = False
+    task_name: Optional[str] = None
+    alignment: Union[List[torch.TensorType], List[int]] = None
+    length_subwords: Union[torch.TensorType, List[int]] = None
+    raw: Optional[List[List[str]]] = None
+
+
+class EncodedWordBatch(NamedTuple):
+    word: EncoderOutput
+    char: EncoderOutput
+    tasks: EncoderOutput
 
 
 class LabelEncoder(object):
@@ -247,7 +266,7 @@ class LabelEncoder(object):
         else:
             output = [transform_seq(w) for w in seq]
 
-        return output
+        return EncoderOutput(content=output, length=None)
 
     def inverse_transform(self, seq):
         if not self.fitted:
@@ -364,7 +383,7 @@ class HugginfaceEncoder(LabelEncoder):
         self.level = level.lower()
         self.name = name
         self.type = "subword"
-
+        self.preprocessor = None
         self.unk = constants.UNK
         self.pad = constants.PAD if pad else None
         self.eos = constants.EOS if eos else None
@@ -445,7 +464,13 @@ class HugginfaceEncoder(LabelEncoder):
 
             encoded = self._tokenizer.encode(s, is_pretokenized=True, add_special_tokens=True)
             output.extend(encoded.ids)
-            return output, encoded.word_ids, encoded.tokens
+
+            return EncoderOutput(
+                content=output,
+                alignment=encoded.word_ids,
+                is_subword=True,
+                raw=encoded.tokens
+            )
 
         return transform_seq(seq)
 
@@ -943,14 +968,6 @@ class Dataset(object):
         buf = [data for _, data in self.reader.readsents()]
         for batch, raw in self.prepare_buffer(buf, return_raw=True, device='cpu'):
             self.cached.append((batch, raw))
-
-
-
-from collections import namedtuple
-
-
-EncodedWordBatch = namedtuple("EncodedWordBatch", ["word", "wlen", "subwlen", "alignment"],
-                              defaults=[None, None, None, None])
 
 
 def pack_batch(label_encoder, batch, device=None):
