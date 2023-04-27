@@ -388,7 +388,7 @@ class AttentionalDecoder(nn.Module):
             # We set the score where we have EOS predictions as 0
             score[inp == eos] = 0
             # So that we can add the score to finale scores
-            final_scores[tensor_to_original_batch_indexes] += score.cpu()
+            final_scores[tensor_to_original_batch_indexes.cpu()] += score.cpu()
 
             # We add this new output to the final hypothesis
             hyps.append(seq_output.tolist())
