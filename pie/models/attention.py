@@ -38,7 +38,8 @@ class GeneralScorer(nn.Module):
         initialization.init_linear(self.W_a)
 
     def forward(self, dec_out, enc_outs, **kwargs):
-        return DotScorer(self.W_a(dec_out), enc_outs)
+        w = self.W_a(dec_out)
+        return DotScorer(w, enc_outs)
 
 
 class BahdanauScorer(nn.Module):

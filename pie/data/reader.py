@@ -6,7 +6,6 @@ from pie.utils import get_filenames
 
 from .tabreader import TabReader
 from .conll_reader import CONLLReader, CONLLUReader
-from .tei_reader import TEIReader
 
 
 class Reader(object):
@@ -55,9 +54,6 @@ class Reader(object):
 
         elif fpath.endswith('conllu'):
             return CONLLUReader
-
-        elif fpath.endswith('xml'):
-            return TEIReader
 
         else:
             raise ValueError("Unknown file format: {}".format(fpath))

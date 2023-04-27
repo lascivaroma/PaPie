@@ -14,7 +14,7 @@ import torch
 from torch import optim
 from torch.optim import Optimizer
 from torch.nn.utils import clip_grad_norm_
-import torch_optimizer as ext_optims
+import pytorch_optimizer as ext_optims
 
 logging.basicConfig(format='%(asctime)s : %(message)s', level=logging.INFO)
 

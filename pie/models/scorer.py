@@ -1,15 +1,47 @@
-
+from typing import Optional
 import yaml
 import difflib
 from termcolor import colored
 from terminaltables import github_table
 from collections import Counter, defaultdict
 
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, balanced_accuracy_score
-from sklearn.utils.multiclass import unique_labels
+from torchmetrics.functional import accuracy, precision, recall, f1_score
 import numpy as np
-from pie import utils
+import torch
 from pie import constants
+
+
+def format_score(score):
+    return round(float(score), 4)
+
+
+class _LocalEncoder:
+    def __init__(self, *values):
+        self.toi = sorted(list(set(values)))
+
+    def encode(self, array):
+        return torch.tensor([
+            self.toi.index(v)
+            for v in array
+        ], device="cpu")
+
+    def decode(self, idx: int) -> str:
+        return self.toi[idx]
+
+def precision_recall_fscore_support(
+        preds: torch.Tensor,
+        trues: torch.Tensor,
+        average: Optional[str] = "micro",
+        num_classes: int = -1
+):
+    p = precision(preds, trues, task="multiclass", average=average, num_classes=num_classes)
+    r = recall(preds, trues, task="multiclass", average=average, num_classes=num_classes)
+    f1 = f1_score(preds, trues, task="multiclass", average=average, num_classes=num_classes)
+    if average == "micro":
+        s = len(trues)
+    else:
+        s = None
+    return p, r, f1, s
 
 
 def get_known_and_ambigous_tokens(trainset, label_encoders):
@@ -21,7 +53,7 @@ def get_known_and_ambigous_tokens(trainset, label_encoders):
     """
     known = set()
     ambs = defaultdict(lambda: defaultdict(Counter))
-    targets = [le.target for le in label_encoders]
+    # targets = [le.target for le in label_encoders]
     for _, (inp, tasks) in trainset.reader.readsents():
         known.update(inp)
         for le in label_encoders:
@@ -33,17 +65,17 @@ def get_known_and_ambigous_tokens(trainset, label_encoders):
 
 def compute_scores(trues, preds):
 
-    def format_score(score):
-        return round(float(score), 4)
+    enc = _LocalEncoder(*trues, *preds)
+    preds_array = enc.encode(preds)
+    trues_array = enc.encode(trues)
+    num_classes = len(enc.toi)
+    p, r, f1, s = precision_recall_fscore_support(preds_array, trues_array, num_classes=num_classes)
+    b = format_score(recall(preds_array, trues_array, task="multiclass", average="macro", num_classes=num_classes))
+    p = format_score(p)
+    r = format_score(r)
+    a = format_score(accuracy(preds_array, trues_array, task="multiclass", average="micro", num_classes=num_classes))
 
-    with utils.shutup():
-        p, r, f1, _ = precision_recall_fscore_support(trues, preds, average="macro")
-        b = format_score(balanced_accuracy_score(trues, preds))
-        p = format_score(p)
-        r = format_score(r)
-        a = format_score(accuracy_score(trues, preds))
-
-    return {'accuracy': a, 'precision': p, 'recall': r, 'support': len(trues),
+    return {'accuracy': a, 'precision': p, 'recall': r, 'support': s,
             'balanced-accuracy': b, 'f1': format_score(f1)}
 
 
@@ -357,27 +389,37 @@ def classification_report(y_true, y_pred, digits=2):
     """
     floatfmt = "{0:" + '.{:}f'.format(digits) + "}"
 
-    labels = unique_labels(y_true, y_pred)
+    labels = list(set(y_true).union(set(y_pred)))
     target_names = [str(key) for key in labels]
 
-    last_line_heading = 'avg / total'
+    last_line_heading = '[Macro-Average]'
     headers = ["target", "precision", "recall", "f1-score", "support"]
 
-    p, r, f1, s = precision_recall_fscore_support(y_true, y_pred, average=None)
+    enc = _LocalEncoder(*y_true, *y_pred)
+    preds_array = enc.encode(y_pred)
+    trues_array = enc.encode(y_true)
+    num_classes = len(enc.toi)
+    p, r, f1, s = precision_recall_fscore_support(preds_array, trues_array, average=None, num_classes=num_classes)
 
-    formatted = []
-    for nb_list in [p, r, f1]:
-        formatted.append([floatfmt.format(x) for x in nb_list.tolist()])
-    support = [[str(x) for x in s.tolist()]]
-
-    tbl_rows = list(zip(target_names, *formatted, *support))
+    tbl_rows = []
+    for idx, (pre, rec, f1s) in enumerate(zip(p.tolist(), r.tolist(), f1.tolist())):
+        label = enc.decode(idx)
+        if y_true.count(label) > 0:  # Only take into account truth classes
+            tbl_rows.append([
+                label,
+                floatfmt.format(pre),
+                floatfmt.format(rec),
+                floatfmt.format(f1s),
+                str(y_true.count(label)),
+            ])
 
     # compute averages
+    tbl_rows.append(["-"]*5)
     last_row = [last_line_heading,
                 floatfmt.format(np.average(p)),
                 floatfmt.format(np.average(r)),
                 floatfmt.format(np.average(f1)),
-                str(np.sum(s))]
+                str(len(y_true))]
     tbl_rows.append(last_row)
 
     return github_table.GithubFlavoredMarkdownTable([headers] + tbl_rows).table

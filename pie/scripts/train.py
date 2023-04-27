@@ -10,8 +10,7 @@ from pie.settings import settings_from_file
 from pie.trainer import Trainer
 from pie import initialization
 from pie.data import Dataset, Reader, MultiLabelEncoder
-from pie.models import SimpleModel, get_pretrained_embeddings
-from pie import optimize
+from pie.models import SimpleModel
 
 # set seeds
 import random
@@ -107,18 +106,13 @@ def run(settings):
     # pretrain(/load pretrained) embeddings
     if model.wemb is not None:
         if settings.pretrain_embeddings:
-            print("Pretraining word embeddings")
-            wemb_reader = Reader(
-                settings, settings.input_path, settings.dev_path, settings.test_path)
-            weight = get_pretrained_embeddings(
-                wemb_reader, label_encoder, size=settings.wemb_dim,
-                window=5, negative=5, min_count=1)
-            model.wemb.weight.data = torch.tensor(weight, dtype=torch.float32)
+            raise ValueError("Pretrained Gensim embedding is not supported in PaPie since 0.3.12. "
+                             "Check load_pretrained_embeddings as an alternative.")
 
         elif settings.load_pretrained_embeddings:
             print("Loading pretrained embeddings")
             if not os.path.isfile(settings.load_pretrained_embeddings):
-                print("Couldn't find pretrained eembeddings in: {}".format(
+                print("Couldn't find pretrained embeddings in: {}".format(
                     settings.load_pretrained_embeddings))
             initialization.init_pretrained_embeddings(
                 settings.load_pretrained_embeddings, label_encoder.word, model.wemb)
@@ -201,6 +195,7 @@ if __name__ == "__main__":
 
     settings = settings_from_file(args.config_path)
 
+    from pie import optimize
     if args.opt_path:
         opt = optimize.read_opt(args.opt_path)
         optimize.run_optimize(run, settings, opt, args.n_iter)
