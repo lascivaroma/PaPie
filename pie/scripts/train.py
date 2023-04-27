@@ -154,9 +154,12 @@ def run(settings):
 
     if settings.test_path:
         print("Evaluating model on test set")
-        testset = Dataset(settings, Reader(settings, settings.test_path), label_encoder)
-        for task in model.evaluate(testset, trainset).values():
-            task.print_summary()
+        try:
+            testset = Dataset(settings, Reader(settings, settings.test_path), label_encoder)
+            for task in model.evaluate(testset, trainset).values():
+                task.print_summary()
+        except Exception as E:
+            print(E)
 
     # save model
     fpath, infix = get_fname_infix(settings)
