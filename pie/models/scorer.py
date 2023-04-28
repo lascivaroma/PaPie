@@ -5,7 +5,7 @@ from termcolor import colored
 from terminaltables import github_table
 from collections import Counter, defaultdict
 
-from torchmetrics.functional import accuracy, precision, recall, f1_score
+from torchmetrics.functional import accuracy, precision, recall, f1_score, stat_scores
 import numpy as np
 import torch
 from pie import constants
@@ -27,6 +27,7 @@ class _LocalEncoder:
 
     def decode(self, idx: int) -> str:
         return self.toi[idx]
+
 
 def precision_recall_fscore_support(
         preds: torch.Tensor,
@@ -69,13 +70,17 @@ def compute_scores(trues, preds):
     preds_array = enc.encode(preds)
     trues_array = enc.encode(trues)
     num_classes = len(enc.toi)
-    p, r, f1, s = precision_recall_fscore_support(preds_array, trues_array, num_classes=num_classes)
+
+    if num_classes == 0:
+        return {'accuracy': 1, 'precision': 1, 'recall': 1, 'support': 0, 'balanced-accuracy': 1, 'f1': 1}
+
+    p, r, f1, s = precision_recall_fscore_support(preds_array, trues_array, average="macro", num_classes=num_classes)
     b = format_score(recall(preds_array, trues_array, task="multiclass", average="macro", num_classes=num_classes))
     p = format_score(p)
     r = format_score(r)
     a = format_score(accuracy(preds_array, trues_array, task="multiclass", average="micro", num_classes=num_classes))
 
-    return {'accuracy': a, 'precision': p, 'recall': r, 'support': s,
+    return {'accuracy': a, 'precision': p, 'recall': r, 'support': len(trues),
             'balanced-accuracy': b, 'f1': format_score(f1)}
 
 
