@@ -1,0 +1,36 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: >-
+  (Pa)PIE: A Framework for Joint Learning of Sequence
+  Labeling Tasks
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Enrique
+    family-names: Manjavacas
+    orcid: 'https://orcid.org/0000-0002-3942-7680'
+  - given-names: Thibault
+    family-names: Clérice
+    affiliation: Inria
+    orcid: 'https://orcid.org/0000-0003-1852-9204'
+  - given-names: Mike
+    family-names: Kestemont
+    orcid: 'https://orcid.org/0000-0003-3590-693X'
+  - given-names: Kadar
+    family-names: Akos
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.4572585
+repository-code: 'https://github.com/lascivaroma/PaPie'
+abstract: >-
+  (Pa)Pie is a fork from PIE, developed by Manjavacas, Kadar
+  and Kestemont. It provides extended functionalities on top
+  of Pie, which is a RNN-based lemmatizer.
+license: MIT
+commit: bbcde7a
+version: 0.4.2
+date-released: '2023-04-21'
