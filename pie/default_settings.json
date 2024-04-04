@@ -124,6 +124,10 @@
   "load_pretrained_embeddings": "", // file with pretrained embeddings in word2vec format
   "load_pretrained_encoder": "", // path to file with pretrained sentence encoder
   "freeze_embeddings": false, // whether to freeze the word embeddings
+  "load_pretrained_model": {
+    "model_tar": "",
+    "exclude": []
+  }, // config to load a pretrained model
 
   // * Optimization
   "dropout": 0.0, // dropout

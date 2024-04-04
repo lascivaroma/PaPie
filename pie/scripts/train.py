@@ -4,6 +4,7 @@ import time
 import os
 from datetime import datetime
 import logging
+import warnings
 
 import pie
 from pie.settings import settings_from_file
@@ -117,9 +118,16 @@ def run(settings):
             initialization.init_pretrained_embeddings(
                 settings.load_pretrained_embeddings, label_encoder.word, model.wemb)
 
-    # load pretrained weights
+    # load weights from a pretrained encoder
     if settings.load_pretrained_encoder:
         model.init_from_encoder(pie.Encoder.load(settings.load_pretrained_encoder))
+    
+    if settings.load_pretrained_model.get("model_tar"):
+        print(f"Loading pretrained model {settings.load_pretrained_model['model_tar']}")
+        model.load_state_dict_from_pretrained(
+            settings.load_pretrained_model["model_tar"],
+            settings.load_pretrained_model.get("exclude", [])
+        )
 
     # freeze embeddings
     if settings.freeze_embeddings:
