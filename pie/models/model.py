@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import tarfile
+import warnings
 from collections import OrderedDict
 
 import torch
@@ -223,15 +224,15 @@ class SimpleModel(BaseModel):
         if self.include_lm:
             pass
 
-    def load_state_dict_from_pretrained(self, model_tar, exclude=[]):
+    def load_state_dict_from_pretrained(self, pretrained, exclude=[]):
         """
         Load the state_dict of previously trained model layer by layer (blocks) into the current model.
 
         Parameters
         ==========
-        model_tar : str, path to the .tar file where the pretrained model is stored
+        pretrained : str, path to the .tar file where the pretrained model is stored
         exclude : list (optional), List of model parts to exclude from loading. Defaults to [].
-                Available values are: "wemb", "cemb", "cemb_rnn", "sent_rnn", "lm", "pos", "lemma"
+                Available values are: "wemb", "cemb", "cemb_rnn", "sent_rnn", "lm", as well as any decoding task
         """
         def get_block_state_dict(block_name, full_state_dict):
             block_state_dict = OrderedDict({
@@ -239,13 +240,63 @@ class SimpleModel(BaseModel):
                 if k.startswith(block_name)
             })
             return block_state_dict
+
+        def load_state_dict_label_by_label(module, module_str, labels_table_key, label_encoder_pretrained, state_dict_pretrained, is_task=False):
+            """Load pretrained state dict parameters iteratively for each label (vocab/classification labels...)
+
+            This is done label by label as the label tables may differ between the pretrained and current model.
+
+            Example to load character embeddings:
+            For each character in the pretrained character vocabulary (stored in the label encoder),
+            if the character is also in the current model's character vocabulary (current label encoder),
+            its corresponding pretrained parameter is copied into the model.cemb.emb.weight layer.
+
+            Args:
+                module : module of the current model (e.g. self.cemb.emb)
+                module_str (str): name of the module (to find it in the pretrained state dict)
+                labels_table_key (str): name of the labels table in the label encoders (e.g. 'char')
+                label_encoder_pretrained (MultiLabelEncoder): MultiLabelEncoder of the pretrained model
+                state_dict_pretrained (OrderedDict): state_dict with parameters of the pretrained model
+                is_task (bool): Set to True if the labels are stored in the dicts MultiLabelEncoder.tasks
+                    (instead of direct attributes of MultiLabelEncoder)
+            """
+            params_to_update = [p[0] for p in module.named_buffers()] + [p[0] for p in module.named_parameters()]
+            
+            if is_task:
+                labels_dict_pretrained = label_encoder_pretrained.tasks[labels_table_key].table
+                labels_dict_current = self.label_encoder.tasks[labels_table_key].table
+            else:
+                labels_dict_pretrained = getattr(label_encoder_pretrained, labels_table_key).table
+                labels_dict_current = getattr(self.label_encoder, labels_table_key).table
+            
+            nb_labels_new_model = len(labels_dict_current)
+            nb_pretrained_labels = len(labels_dict_pretrained)
+            
+            total_updated = 0
+            for w, idx in labels_dict_pretrained.items():
+                if w in labels_dict_current:
+                    model_w_idx = labels_dict_current[w]
+                    for param_name in params_to_update:
+                        # Get parameter attribute in the model - also handling cases like 'decoder.weight' instead of just 'weight'
+                        param_attr = module
+                        for param_part in param_name.split("."):
+                            param_attr = getattr(param_attr, param_part)
+                        # Copy the pretrained parameter into the model at the right index
+                        param_attr.data[model_w_idx].copy_(state_dict_pretrained[f"{module_str}.{param_name}"][idx])
+                    total_updated += 1
+
+            return total_updated, nb_labels_new_model, nb_pretrained_labels
+
         
-        model_parts_to_load = ["wemb", "cemb", "cemb_rnn", "sent_rnn", "lm", "pos", "lemma"]
+        model_parts_to_load = ["wemb", "cemb", "cemb_rnn", "sent_rnn"]
+        if self.include_lm:
+            model_parts_to_load.append("lm")
+        model_parts_to_load.extend(list(self.tasks.keys()))
         if exclude:
             model_parts_to_load = [p for p in model_parts_to_load if p not in exclude]
 
         # Load the pretrained model's label encoder and state_dict
-        with tarfile.open(utils.ensure_ext(model_tar, 'tar'), 'r') as tar:
+        with tarfile.open(utils.ensure_ext(pretrained, 'tar'), 'r') as tar:
             # load label encoder
             label_encoder_pretrained = MultiLabelEncoder.load_from_string(
                 utils.get_gzip_from_tar(tar, 'label_encoder.zip'))
@@ -260,25 +311,13 @@ class SimpleModel(BaseModel):
         # This is done word by word as the vocabularies may differ between both models
         # For each word of the pretrained model label encoder, if the word is also in the current label encoder,
         # Copy the corresponding weight into the model wemb layer parameters
-        if "wemb" in model_parts_to_load and "wemb.emb.weight" in state_dict_pretrained:
-            total = 0
-            for w, idx in label_encoder_pretrained.word.table.items():
-                if w in self.label_encoder.word.table:
-                    self.wemb.weight.data[self.label_encoder.word.table[w]].copy_(
-                        state_dict_pretrained["wemb.emb.weight"][idx])
-                    total += 1
-            print("Initialized {}/{} word embs".format(total, len(self.wemb.weight)))
-
-        # Load state_dict of the character embeddings layer (cemb)
-        # This is done character by character as the vocabularies may differ between both models
-        if "cemb" in model_parts_to_load:
-            total = 0
-            for w, idx in label_encoder_pretrained.char.table.items():
-                if w in self.label_encoder.char.table:
-                    self.cemb.emb.weight.data[self.label_encoder.char.table[w]].copy_(
-                        state_dict_pretrained["cemb.emb.weight"][idx])
-                    total += 1
-            print("Initialized {}/{} char embs".format(total, len(self.cemb.emb.weight)))
+        if "wemb.emb.weight" in state_dict_pretrained:
+            total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
+                self.wemb, "wemb", "word", label_encoder_pretrained, state_dict_pretrained)
+            print(f"Initialized {total_updated}/{nb_labels_new_model} word embs ({nb_pretrained_labels} in pretrained model)")
+        total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
+            self.cemb.emb, "cemb.emb", "char", label_encoder_pretrained, state_dict_pretrained)
+        print(f"Initialized {total_updated}/{nb_labels_new_model} char embs ({nb_pretrained_labels} in pretrained model)")
 
         # Load state_dict of the character-level RNN
         if "cemb_rnn" in model_parts_to_load:
@@ -288,37 +327,39 @@ class SimpleModel(BaseModel):
         # This is done words by word as the vocabularies may differ between both models
         # Very similar to the copying of the wemb/cemb embeddings
         # except that the LM has 3 params for each direction (nll_weight, weight and bias)
-        if self.include_lm and "lm" in model_parts_to_load:
-                # fwd
-                total = 0
-                for w, idx in label_encoder_pretrained.word.table.items():
-                    if w in self.label_encoder.word.table:
-                        self.lm_fwd_decoder.nll_weight.data[self.label_encoder.word.table[w]].copy_(
-                            state_dict_pretrained["lm_fwd_decoder.nll_weight"][idx])
-                        self.lm_fwd_decoder.decoder.weight.data[self.label_encoder.word.table[w]].copy_(
-                            state_dict_pretrained["lm_fwd_decoder.decoder.weight"][idx])
-                        self.lm_fwd_decoder.decoder.bias.data[self.label_encoder.word.table[w]].copy_(
-                            state_dict_pretrained["lm_fwd_decoder.decoder.bias"][idx])
-                        total += 1
-                print("Initialized {}/{} fwd LM word parameters".format(total, len(self.label_encoder.word)))
+        if "lm" in model_parts_to_load:
+            # fwd
+            total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
+                self.lm_fwd_decoder, "lm_fwd_decoder", "word", label_encoder_pretrained, state_dict_pretrained)
+            print(f"Initialized {total_updated}/{nb_labels_new_model} fwd LM word parameters ({nb_pretrained_labels} in pretrained model)")
+            # bwd
+            total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
+                self.lm_bwd_decoder, "lm_bwd_decoder", "word", label_encoder_pretrained, state_dict_pretrained)
+            print(f"Initialized {total_updated}/{nb_labels_new_model} bwd LM word parameters ({nb_pretrained_labels} in pretrained model)")
 
-                # bwd
-                total = 0
-                for w, idx in label_encoder_pretrained.word.table.items():
-                    if w in self.label_encoder.word.table:
-                        self.lm_bwd_decoder.nll_weight.data[self.label_encoder.word.table[w]].copy_(
-                            state_dict_pretrained["lm_bwd_decoder.nll_weight"][idx])
-                        self.lm_bwd_decoder.decoder.weight.data[self.label_encoder.word.table[w]].copy_(
-                            state_dict_pretrained["lm_bwd_decoder.decoder.weight"][idx])
-                        self.lm_bwd_decoder.decoder.bias.data[self.label_encoder.word.table[w]].copy_(
-                            state_dict_pretrained["lm_fwd_decoder.decoder.bias"][idx])
-                        total += 1
-                print("Initialized {}/{} bwd LM word parameters".format(total, len(self.label_encoder.word)))
-
-        # Load state_dict for the specific tasks (*_decoder)
+        # Fill tasks-specific params - WARNING DEPENDS ON THE TYPE OF TASK=DECODER
         for tname in self.tasks.keys():
-            if tname in model_parts_to_load:
-                self.decoders[tname].load_state_dict(get_block_state_dict(tname+"_decoder.", state_dict_pretrained))
+            if tname not in label_encoder_pretrained.tasks:
+                # lowercase all tasks then look again
+                found_normalized_task = False
+                for pretrained_task in list(label_encoder_pretrained.tasks.keys()):
+                    if tname.lower() == pretrained_task.lower():
+                        label_encoder_pretrained.tasks[tname] = label_encoder_pretrained.tasks[pretrained_task]
+                        found_normalized_task = True
+                        warnings.warn(
+                            f"Task {tname} not found in pretrained label encoder, but {pretrained_task} was found, "
+                            f"therefore parameters of the {pretrained_task} will be loaded in task {tname}.")
+                        break
+                if not found_normalized_task:
+                    warnings.warn(f"Task {tname} not found in the pretrained label encoder.")
+                    continue
+
+            if isinstance(self.decoders[tname], LinearDecoder):
+                total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
+                    self.decoders[tname], tname+"_decoder", tname, label_encoder_pretrained, state_dict_pretrained, is_task=True)
+                print(f"Initialized {total_updated}/{nb_labels_new_model} {tname} labels parameters ({nb_pretrained_labels} in pretrained model)")
+            else:
+                raise NotImplementedError(f"Can only load decoder parameters for tasks with Linear Decoders (found {type(self.decoders[tname])})")
 
     def loss(self, batch_data, *target_tasks):
         ((word, wlen), (char, clen)), tasks = batch_data

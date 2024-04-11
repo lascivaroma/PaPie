@@ -122,10 +122,10 @@ def run(settings):
     if settings.load_pretrained_encoder:
         model.init_from_encoder(pie.Encoder.load(settings.load_pretrained_encoder))
     
-    if settings.load_pretrained_model.get("model_tar"):
+    if settings.load_pretrained_model.get("pretrained"):
         print(f"Loading pretrained model {settings.load_pretrained_model['model_tar']}")
         model.load_state_dict_from_pretrained(
-            settings.load_pretrained_model["model_tar"],
+            settings.load_pretrained_model["pretrained"],
             settings.load_pretrained_model.get("exclude", [])
         )
 

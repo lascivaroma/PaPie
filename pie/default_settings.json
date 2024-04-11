@@ -127,7 +127,7 @@
   "load_pretrained_encoder": "", // path to file with pretrained sentence encoder
   "freeze_embeddings": false, // whether to freeze the word embeddings
   "load_pretrained_model": {
-    "model_tar": "",
+    "pretrained": "", // Path to the .tar file with the pretrained model
     "exclude": []
   }, // config to load a pretrained model
 
