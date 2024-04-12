@@ -128,7 +128,8 @@
   "freeze_embeddings": false, // whether to freeze the word embeddings
   "load_pretrained_model": {
     "pretrained": "", // Path to the .tar file with the pretrained model
-    "exclude": []
+    "exclude": [],  // Modules to exclude from state_dict loading
+    "expand_labels": true  // whether expand label lists (word/char + tasks vocabs)
   }, // config to load a pretrained model
 
   // * Optimization
