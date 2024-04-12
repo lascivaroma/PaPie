@@ -1,10 +1,9 @@
 
 # Can be run with python -m pie.scripts.train
+import logging
 import time
 import os
 from datetime import datetime
-import logging
-import warnings
 
 import pie
 from pie.settings import settings_from_file
@@ -17,6 +16,8 @@ from pie.models import SimpleModel
 import random
 import numpy
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def get_targets(settings):
@@ -44,7 +45,7 @@ def run(settings):
         torch.cuda.manual_seed(seed)
 
     if settings.verbose:
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(level=logging.INFO, force=True)
 
     # datasets
     reader = Reader(settings, settings.input_path)
@@ -57,11 +58,28 @@ def run(settings):
         print()
 
     # label encoder
-    label_encoder = MultiLabelEncoder.from_settings(settings, tasks=tasks)
-    if settings.verbose:
-        print("::: Fitting data :::")
-        print()
-    label_encoder.fit_reader(reader)
+    if settings.load_pretrained_model.get("pretrained"):
+        label_encoder = MultiLabelEncoder.load_from_pretrained_model(
+            path=settings.load_pretrained_model["pretrained"],
+            new_settings=settings,
+            tasks=[t["name"] for t in settings.tasks]
+        )
+        if settings.load_pretrained_model.get("expand_labels") is True:
+            if settings.verbose:
+                print("::: Fitting/Expanding MultiLabelEncoder with data :::")
+                print()
+            label_encoder.fit_reader(reader, expand_mode=True)
+        else:
+            if settings.verbose:
+                print("::: Fitting MultiLabelEncoder with data (unfitted LabelEncoders only) :::")
+                print()
+            label_encoder.fit_reader(reader, skip_fitted=True)
+    else:
+        label_encoder = MultiLabelEncoder.from_settings(settings, tasks=tasks)
+        if settings.verbose:
+            print("::: Fitting MultiLabelEncoder with data :::")
+            print()
+        label_encoder.fit_reader(reader)
 
     if settings.verbose:
         print()
@@ -87,7 +105,7 @@ def run(settings):
     if settings.dev_path:
         devset = Dataset(settings, Reader(settings, settings.dev_path), label_encoder)
     else:
-        logging.warning("No devset: cannot monitor/optimize training")
+        logger.warning("No devset: cannot monitor/optimize training")
 
     # model
     model = SimpleModel(
@@ -123,7 +141,7 @@ def run(settings):
         model.init_from_encoder(pie.Encoder.load(settings.load_pretrained_encoder))
     
     if settings.load_pretrained_model.get("pretrained"):
-        print(f"Loading pretrained model {settings.load_pretrained_model['model_tar']}")
+        print(f"Loading pretrained model {settings.load_pretrained_model['pretrained']}")
         model.load_state_dict_from_pretrained(
             settings.load_pretrained_model["pretrained"],
             settings.load_pretrained_model.get("exclude", [])
