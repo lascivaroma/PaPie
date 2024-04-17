@@ -242,6 +242,7 @@ class LabelEncoder(object):
 
         Important when using the upper strategy
         """
+        # Get all new uppercase chars of lowercase chars in the vocab
         inp = self.inverse_table[len(self.reserved):]
         new_chars = list(map(
             lambda x: x.upper(),
@@ -250,6 +251,11 @@ class LabelEncoder(object):
                 inp
             )
         ))
+
+        # Remove duplicates (in rare cases, multiple lowercase chars can have the same uppercasing)
+        new_chars = list(dict.fromkeys(new_chars))
+
+        # Reduce list of new chars to the number of available slots
         if self.max_size:
             t = len(self.inverse_table)
             r = len(self.reserved)
@@ -257,6 +263,8 @@ class LabelEncoder(object):
                 new_chars = new_chars[:min(len(new_chars), self.max_size-t-r)]
             else:
                 return # We have too much in the vocab already
+        
+        # Add new chars to the vocabulary
         self.inverse_table.extend(new_chars)
         self.table = {sym: idx for idx, sym in enumerate(self.inverse_table)}
 
