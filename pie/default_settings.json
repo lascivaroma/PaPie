@@ -100,7 +100,7 @@
   // general task schedule params (can be overwritten in the "settings" entry of each)
   "patience": 100, // task patience (global early stopping patience for target task)
   "factor": 1, // default task schedule factor
-  "threshold": 0, // default task schedule thresholed
+  "threshold": 0, // default task schedule threshold
   "min_weight": 0, // default task schedule min_weight
 
   // * Joint LM-loss
@@ -124,11 +124,15 @@
   "load_pretrained_embeddings": "", // file with pretrained embeddings in word2vec format
   "load_pretrained_encoder": "", // path to file with pretrained sentence encoder
   "freeze_embeddings": false, // whether to freeze the word embeddings
-  "load_pretrained_model": {
+  "load_pretrained_model": {  // config to load a pretrained model
     "pretrained": "", // Path to the .tar file with the pretrained model
     "exclude": [],  // Modules to exclude from state_dict loading
-    "expand_labels": true  // whether expand label lists (word/char + tasks vocabs)
-  }, // config to load a pretrained model
+    "labels_mode": "expand"  // mode for creating the MultiLabelEncoder (word/char + tasks vocabs). 
+    // Options = {"expand", "skip", "replace"}:
+    // - "expand" expand existing pretrained label lists
+    // - "skip": only fit new encoders (for fine-tuning on a new task)
+    // - "replace": fit a new MultiLabelEncoder only with the finetuning data
+  }, 
 
   // * Optimization
   "dropout": 0.0, // dropout

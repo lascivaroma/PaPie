@@ -58,23 +58,27 @@ def run(settings):
         print()
 
     # label encoder
-    if settings.load_pretrained_model.get("pretrained"):
+    labels_mode = settings.load_pretrained_model.get("labels_mode")
+    labels_mode_accepted = ["expand", "replace", "skip"]
+    assert labels_mode in labels_mode_accepted, \
+        f"Invalid value for labels_mode ({labels_mode}), accepted values are {labels_mode_accepted}"
+    if settings.load_pretrained_model.get("pretrained") and labels_mode != "replace":
         label_encoder = MultiLabelEncoder.load_from_pretrained_model(
             path=settings.load_pretrained_model["pretrained"],
             new_settings=settings,
             tasks=[t["name"] for t in settings.tasks]
         )
-        if settings.load_pretrained_model.get("expand_labels") is True:
+        if settings.load_pretrained_model.get("labels_mode") == "expand":
             if settings.verbose:
                 print("::: Fitting/Expanding MultiLabelEncoder with data :::")
                 print()
             label_encoder.fit_reader(reader, expand_mode=True)
-        else:
+        else:  # "skip"
             if settings.verbose:
                 print("::: Fitting MultiLabelEncoder with data (unfitted LabelEncoders only) :::")
                 print()
             label_encoder.fit_reader(reader, skip_fitted=True)
-    else:
+    else:  # train from scratch or labels_mode== "replace"
         label_encoder = MultiLabelEncoder.from_settings(settings, tasks=tasks)
         if settings.verbose:
             print("::: Fitting MultiLabelEncoder with data :::")
