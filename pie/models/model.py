@@ -457,16 +457,16 @@ class SimpleModel(BaseModel):
                     label_encoder_pretrained,
                     state_dict_pretrained,
                     is_task=True,
-                    exclude_params_regex="^rnn"
+                    exclude_params_regex="^(rnn)|(attn)"
                 )
                 model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
                 # Load decoder RNN params in block
                 module_name = f"{tname}_decoder.rnn"
-                params_updated = load_pretrained_module_in_block(self.encoder.rnn, module_name)
+                params_updated = load_pretrained_module_in_block(self.decoders[tname].rnn, module_name)
                 model_params_loaded.extend([f"{module_name}.{p}" for p in params_updated])
                 # Load decoder attn params in block
                 module_name = f"{tname}_decoder.attn"
-                params_updated = load_pretrained_module_in_block(self.encoder.rnn, module_name)
+                params_updated = load_pretrained_module_in_block(self.decoders[tname].attn, module_name)
                 model_params_loaded.extend([f"{module_name}.{p}" for p in params_updated])
             else:
                 raise NotImplementedError(f"Can only load decoder parameters for tasks with Linear Decoders (found {type(self.decoders[tname])})")
