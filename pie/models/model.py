@@ -252,6 +252,15 @@ class SimpleModel(BaseModel):
                 if k.startswith(module_str)
             })
             return module_state_dict
+        
+        def load_pretrained_module_in_block(module, module_name):
+            module_pretrained_state_dict = get_module_state_dict(module_name+".", state_dict_pretrained)
+            assert module_pretrained_state_dict, f"Module {module_name} not found in the pretrained state_dict"
+            module.load_state_dict(module_pretrained_state_dict)
+            print(f"Loaded module '{module_name}'")
+
+            params_updated = list(module_pretrained_state_dict.keys())
+            return params_updated
 
         def load_state_dict_label_by_label(
                 module,
@@ -311,8 +320,18 @@ class SimpleModel(BaseModel):
                         param_attr.data[model_w_idx].copy_(state_dict_pretrained[f"{module_str}.{param_name}"][idx])
                     total_updated += 1
 
-            return total_updated, nb_labels_new_model, nb_pretrained_labels
+            print(f"Initialized {total_updated}/{nb_labels_new_model} params from module {module_str} "
+                  f"({nb_pretrained_labels} in pretrained model)"
+                  f" - params {params_to_update} of module '{module_str}' loaded")
 
+            load_stats = {
+                "total_updated": total_updated,
+                "nb_labels_new_model": nb_labels_new_model,
+                "nb_labels_pretrained": nb_pretrained_labels,
+                "params_updated": params_to_update
+            }
+
+            return load_stats
         
         model_parts_to_load = ["wemb", "cemb", "cemb_rnn", "sent_rnn"]
         if self.include_lm:
@@ -333,26 +352,46 @@ class SimpleModel(BaseModel):
                 dictpath = os.path.join(tmppath, 'state_dict.pt')
                 state_dict_pretrained = torch.load(dictpath, map_location='cpu')
 
+        model_params_loaded = []
+        # pretrained_params_nonloaded = list(state_dict_pretrained.keys())
+
         # Load state_dict of the word embeddings layer (wemb)
         # This is done word by word as the vocabularies may differ between both models
         # For each word of the pretrained model label encoder, if the word is also in the current label encoder,
         # Copy the corresponding weight into the model wemb layer parameters
         if "wemb.emb.weight" in state_dict_pretrained:
-            total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
-                self.wemb, "wemb", "word", label_encoder_pretrained, state_dict_pretrained)
-            print(f"Initialized {total_updated}/{nb_labels_new_model} word embs ({nb_pretrained_labels} in pretrained model)")
+            module_name = "wemb"
+            load_stats = load_state_dict_label_by_label(
+                self.wemb,
+                module_name,
+                "word",
+                label_encoder_pretrained,
+                state_dict_pretrained
+            )
+            model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
+        
         # Character embeddings (cemb.emb)
-        total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
-            self.cemb.emb, "cemb.emb", "char", label_encoder_pretrained, state_dict_pretrained)
-        print(f"Initialized {total_updated}/{nb_labels_new_model} char embs ({nb_pretrained_labels} in pretrained model)")
+        module_name = "cemb.emb"
+        load_stats = load_state_dict_label_by_label(
+            self.cemb.emb,
+            module_name,
+            "char",
+            label_encoder_pretrained,
+            state_dict_pretrained
+        )
+        model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
 
         # Load state_dict of the character-level RNN encoder
         if "cemb_rnn" in model_parts_to_load:
-            self.cemb.rnn.load_state_dict(get_module_state_dict("cemb.rnn.", state_dict_pretrained))
+            module_name = "cemb.rnn"
+            params_updated = load_pretrained_module_in_block(self.cemb.rnn, module_name)
+            model_params_loaded.extend([f"{module_name}.{p}" for p in params_updated])
 
         # Load state_dict of the sentence-level RNN encoder
         if "sent_rnn" in model_parts_to_load:
-            self.encoder.rnn.load_state_dict(get_module_state_dict("encoder.rnn.", state_dict_pretrained))
+            module_name = "encoder.rnn"
+            params_updated = load_pretrained_module_in_block(self.encoder.rnn, module_name)
+            model_params_loaded.extend([f"{module_name}.{p}" for p in params_updated])
 
         # Load state_dict of the language model (lm)
         # This is done words by word as the vocabularies may differ between both models
@@ -360,23 +399,25 @@ class SimpleModel(BaseModel):
         # except that the LM has 3 params for each direction (nll_weight, weight and bias)
         if "lm" in model_parts_to_load:
             # fwd
-            total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
+            module_name = "lm_fwd_decoder"
+            load_stats = load_state_dict_label_by_label(
                 self.lm_fwd_decoder,
-                "lm_fwd_decoder",
+                module_name,
                 "word",
                 label_encoder_pretrained,
                 state_dict_pretrained
             )
-            print(f"Initialized {total_updated}/{nb_labels_new_model} fwd LM word parameters ({nb_pretrained_labels} in pretrained model)")
+            model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
             # bwd
-            total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
+            module_name = "lm_bwd_decoder"
+            load_stats = load_state_dict_label_by_label(
                 self.lm_bwd_decoder,
-                "lm_bwd_decoder",
+                module_name,
                 "word",
                 label_encoder_pretrained,
                 state_dict_pretrained
             )
-            print(f"Initialized {total_updated}/{nb_labels_new_model} bwd LM word parameters ({nb_pretrained_labels} in pretrained model)")
+            model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
 
         # Fill tasks-specific params - WARNING DEPENDS ON THE TYPE OF TASK=DECODER
         for tname in self.tasks.keys():
@@ -396,32 +437,51 @@ class SimpleModel(BaseModel):
                     continue
 
             if isinstance(self.decoders[tname], LinearDecoder):
-                total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
+                module_name = tname+"_decoder"
+                load_stats = load_state_dict_label_by_label(
                     self.decoders[tname],
-                    tname+"_decoder",
+                    module_name,
                     tname,
                     label_encoder_pretrained,
                     state_dict_pretrained,
                     is_task=True
                 )
-                print(f"Initialized {total_updated}/{nb_labels_new_model} {tname} labels parameters ({nb_pretrained_labels} in pretrained model)")
+                model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
             elif isinstance(self.decoders[tname], AttentionalDecoder):
                 # Load label-related params iterativaly
-                total_updated, nb_labels_new_model, nb_pretrained_labels = load_state_dict_label_by_label(
+                module_name = tname+"_decoder"
+                load_stats = load_state_dict_label_by_label(
                     self.decoders[tname],
-                    tname+"_decoder",
+                    module_name,
                     tname,
                     label_encoder_pretrained,
                     state_dict_pretrained,
                     is_task=True,
                     exclude_params_regex="^rnn"
                 )
-                print(f"Initialized {total_updated}/{nb_labels_new_model} {tname} labels parameters ({nb_pretrained_labels} in pretrained model)")
-                # Load decoder RNN and attn params in block
-                self.decoders[tname].rnn.load_state_dict(get_module_state_dict(f"{tname}_decoder.rnn.", state_dict_pretrained))
-                self.decoders[tname].attn.load_state_dict(get_module_state_dict(f"{tname}_decoder.attn.", state_dict_pretrained))
+                model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
+                # Load decoder RNN params in block
+                module_name = f"{tname}_decoder.rnn"
+                params_updated = load_pretrained_module_in_block(self.encoder.rnn, module_name)
+                model_params_loaded.extend([f"{module_name}.{p}" for p in params_updated])
+                # Load decoder attn params in block
+                module_name = f"{tname}_decoder.attn"
+                params_updated = load_pretrained_module_in_block(self.encoder.rnn, module_name)
+                model_params_loaded.extend([f"{module_name}.{p}" for p in params_updated])
             else:
                 raise NotImplementedError(f"Can only load decoder parameters for tasks with Linear Decoders (found {type(self.decoders[tname])})")
+            
+        # Check if some modules were not loaded
+        model_params_nonloaded = set(list(self.state_dict().keys())).difference(set(model_params_loaded))
+        if model_params_nonloaded:
+            model_params_nonloaded_str = "\n\t- " + '\n\t- '.join(sorted(list(model_params_nonloaded)))
+            print(f"The following modules were not loaded from the pretrained state_dict: "
+                  f"{model_params_nonloaded_str}")
+        pretrained_params_nonloaded = set(list(state_dict_pretrained.keys())).difference(set(model_params_loaded))
+        if pretrained_params_nonloaded and pretrained_params_nonloaded != model_params_nonloaded:
+            pretrained_params_nonloaded_str = "\n\t- " + '\n\t- '.join(sorted(list(pretrained_params_nonloaded)))
+            print(f"The following pretrained params were not loaded into the model: {pretrained_params_nonloaded}"
+                  f"{pretrained_params_nonloaded_str}")
 
     def loss(self, batch_data, *target_tasks):
         ((word, wlen), (char, clen)), tasks = batch_data
