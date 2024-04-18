@@ -32,11 +32,16 @@ def get_fname_infix(settings):
     return fname, infix
 
 
-def run(settings):
+def run(settings, seed):
     now = datetime.now()
 
     # set seed
-    seed = now.hour * 10000 + now.minute * 100 + now.second
+    if seed is None:
+        if settings.seed == "auto":
+            seed = now.hour * 10000 + now.minute * 100 + now.second
+        else:
+            seed = settings.seed
+            assert isinstance(seed, int), "Seed should be an integer"
     print("Using seed:", seed)
     random.seed(seed)
     numpy.random.seed(seed)
