@@ -6,6 +6,7 @@
   // * General
   "modelname": "model", // model name to be used for saving
   "modelpath": "./", // model path to be used for saving
+  "seed": "auto", // set a seed number or 'auto' to let the training script define it
 
   // * Data
   "input_path": "", // path (unix-like expression) to files with training data
