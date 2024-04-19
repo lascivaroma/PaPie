@@ -1,9 +1,9 @@
 
 # Can be run with python -m pie.scripts.train
+import logging
 import time
 import os
 from datetime import datetime
-import logging
 
 import pie
 from pie.settings import settings_from_file
@@ -16,6 +16,8 @@ from pie.models import SimpleModel
 import random
 import numpy
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def get_targets(settings):
@@ -30,11 +32,16 @@ def get_fname_infix(settings):
     return fname, infix
 
 
-def run(settings):
+def run(settings, seed):
     now = datetime.now()
 
     # set seed
-    seed = now.hour * 10000 + now.minute * 100 + now.second
+    if seed is None:
+        if settings.seed == "auto":
+            seed = now.hour * 10000 + now.minute * 100 + now.second
+        else:
+            seed = settings.seed
+            assert isinstance(seed, int), "Seed should be an integer"
     print("Using seed:", seed)
     random.seed(seed)
     numpy.random.seed(seed)
@@ -43,7 +50,7 @@ def run(settings):
         torch.cuda.manual_seed(seed)
 
     if settings.verbose:
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(level=logging.INFO, force=True)
 
     # datasets
     reader = Reader(settings, settings.input_path)
@@ -56,11 +63,32 @@ def run(settings):
         print()
 
     # label encoder
-    label_encoder = MultiLabelEncoder.from_settings(settings, tasks=tasks)
-    if settings.verbose:
-        print("::: Fitting data :::")
-        print()
-    label_encoder.fit_reader(reader)
+    labels_mode = settings.load_pretrained_model.get("labels_mode")
+    labels_mode_accepted = ["expand", "replace", "skip"]
+    assert labels_mode in labels_mode_accepted, \
+        f"Invalid value for labels_mode ({labels_mode}), accepted values are {labels_mode_accepted}"
+    if settings.load_pretrained_model.get("pretrained") and labels_mode != "replace":
+        label_encoder = MultiLabelEncoder.load_from_pretrained_model(
+            path=settings.load_pretrained_model["pretrained"],
+            new_settings=settings,
+            tasks=[t["name"] for t in settings.tasks]
+        )
+        if settings.load_pretrained_model.get("labels_mode") == "expand":
+            if settings.verbose:
+                print("::: Fitting/Expanding MultiLabelEncoder with data :::")
+                print()
+            label_encoder.fit_reader(reader, expand_mode=True)
+        else:  # "skip"
+            if settings.verbose:
+                print("::: Fitting MultiLabelEncoder with data (unfitted LabelEncoders only) :::")
+                print()
+            label_encoder.fit_reader(reader, skip_fitted=True)
+    else:  # train from scratch or labels_mode== "replace"
+        label_encoder = MultiLabelEncoder.from_settings(settings, tasks=tasks)
+        if settings.verbose:
+            print("::: Fitting MultiLabelEncoder with data :::")
+            print()
+        label_encoder.fit_reader(reader)
 
     if settings.verbose:
         print()
@@ -86,7 +114,7 @@ def run(settings):
     if settings.dev_path:
         devset = Dataset(settings, Reader(settings, settings.dev_path), label_encoder)
     else:
-        logging.warning("No devset: cannot monitor/optimize training")
+        logger.warning("No devset: cannot monitor/optimize training")
 
     # model
     model = SimpleModel(
@@ -117,9 +145,16 @@ def run(settings):
             initialization.init_pretrained_embeddings(
                 settings.load_pretrained_embeddings, label_encoder.word, model.wemb)
 
-    # load pretrained weights
+    # load weights from a pretrained encoder
     if settings.load_pretrained_encoder:
         model.init_from_encoder(pie.Encoder.load(settings.load_pretrained_encoder))
+    
+    if settings.load_pretrained_model.get("pretrained"):
+        print(f"Loading pretrained model {settings.load_pretrained_model['pretrained']}")
+        model.load_state_dict_from_pretrained(
+            settings.load_pretrained_model["pretrained"],
+            settings.load_pretrained_model.get("exclude", [])
+        )
 
     # freeze embeddings
     if settings.freeze_embeddings:
