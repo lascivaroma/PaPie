@@ -203,10 +203,10 @@ class LabelEncoder(object):
                     f"({size_original_vocab_noreserved} > {self.max_size}: "
                     f"removing {nb_indexes_to_remove} entries to the vocabulary"
                 )
-                self.inverse_table = self.inverse_table[:nb_indexes_to_remove]
+                self.inverse_table = self.inverse_table[:self.max_size+len(self.reserved)]
                 self.table = {
                     sym: idx for i, (sym, idx) in enumerate(self.table.items())
-                    if i < len(self.inverse_table) - nb_indexes_to_remove
+                    if i < self.max_size+len(self.reserved)
                 }
                 self.fitted = True
                 return
