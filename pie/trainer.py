@@ -210,13 +210,17 @@ class Trainer(object):
         self.dataset = dataset
         self.model = model
         self.optimizer = self.get_optimizer(settings.optimizer)(
-            model.parameters(), lr=settings.lr, **settings.optimizer_params)
+            model.parameters(), lr=settings.lr, **(
+                settings.optimizer_params or {})
+            )
         self.clip_norm = settings.clip_norm
 
         self.report_freq = settings.report_freq
         self.num_batches = num_instances // dataset.batch_size
         if settings.checks_per_epoch == 1:
             self.check_freq = self.num_batches - 1  # check after last batch
+            if self.check_freq == 0:
+                self.check_freq = self.num_batches
         elif settings.checks_per_epoch > self.num_batches:
             self.check_freq = 1  # check after each batch
         elif settings.checks_per_epoch > 1:
@@ -229,7 +233,8 @@ class Trainer(object):
             self.optimizer,
             lr_scheduler=settings.lr_scheduler,
             delay=settings.lr_scheduler_delay,
-            **settings.lr_scheduler_params)
+            **(settings.lr_scheduler_params or {})
+        )
 
         self.noise_strategies = settings.noise_strategies or {}
         self.noise_strategies = {

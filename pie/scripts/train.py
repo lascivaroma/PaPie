@@ -221,21 +221,3 @@ def run(settings, seed):
             f.write('{}\n'.format('\t'.join(line)))
 
     print("Bye!")
-
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('config_path', nargs='?', default='config.json')
-    parser.add_argument('--opt_path', help='Path to optimization file (see opt.json)')
-    parser.add_argument('--n_iter', type=int, default=20)
-    args = parser.parse_args()
-
-    settings = settings_from_file(args.config_path)
-
-    from pie import optimize
-    if args.opt_path:
-        opt = optimize.read_opt(args.opt_path)
-        optimize.run_optimize(run, settings, opt, args.n_iter)
-    else:
-        run(settings)

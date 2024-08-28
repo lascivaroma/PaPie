@@ -125,5 +125,59 @@ def info(model_file):
     click.echo(repr(m))
 
 
+@pie_cli.command("finetune")
+@click.argument('input_model', type=click.Path(exists=True, file_okay=True, readable=True, dir_okay=False))
+@click.argument('train', type=click.Path(exists=True, file_okay=True, readable=True, dir_okay=False))
+@click.argument('dev', type=click.Path(exists=True, file_okay=True, readable=True, dir_okay=False))
+# @click.option('--test', type=str, default=None)
+@click.option('--seed', type=int, default=None)
+@click.option("--batch-size", type=int, default=None)
+@click.option("--epochs", type=int, default=100)
+@click.option("--mode", type=click.Choice(["expand", "skip", "replace"]), default="expand")
+@click.option("--device", type=str, default="cpu")
+@click.option("--out", type=str, default="model")
+@click.option("--path", type=str, default="./models/")
+@click.option("--lr", type=float, default=None)
+def finetune(
+        input_model: click.Path, train: click.Path, dev: click.Path,
+        seed: int, batch_size: int, device: str, epochs: int, out: str, path: str,
+        mode: str, lr: float
+):
+    from pie.models import BaseModel
+
+    m = BaseModel.load(input_model)
+    settings = m._settings #  copy.copy(m._settings)
+    settings["input_path"] = train
+    settings["dev_path"] = dev
+    settings["batch_size"] = batch_size or settings["batch_size"]
+    settings["device"] = device or settings["device"]
+    settings["epochs"] = epochs or settings["epochs"]
+    settings["lr"] = lr or settings["lr"]
+    settings["modelname"] = out
+    settings["modelpath"] = path
+    settings["load_pretrained_model"] = {
+        "pretrained": str(input_model),
+        "labels_mode": mode
+    }
+
+    def upgrade_settings(settings):
+        if "lr_scheduler_params" not in settings:
+            settings["lr_scheduler_params"] = {}
+        if "lr_T_max" in settings:
+            settings.lr_scheduler_params["T_max"] = settings["lr_T_max"]
+
+        settings.pretrain_embeddings = False
+        settings.load_pretrained_embeddings = ""
+        settings.load_pretrained_encoder = ""
+        settings["checks_per_epoch"] = 1
+        # settings["report_freq"] = None
+
+    upgrade_settings(settings)
+
+    import pie.scripts.train
+    import pie.settings
+    pie.scripts.train.run(settings, seed=seed or 42)
+
+
 if __name__ == "__main__":
     pie_cli()

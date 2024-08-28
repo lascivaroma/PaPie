@@ -530,7 +530,7 @@ class MultiLabelEncoder(object):
         for le in list_le_to_expand:
             le.expand_vocab()
 
-        if self.noise_strategies["uppercase"]["apply"]:
+        if self.noise_strategies.get("uppercase", {"apply": False})["apply"]:
             self.word.register_upper()
             self.char.register_upper()
 
