@@ -17,7 +17,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 NAME = 'PaPie'
 DESCRIPTION = 'A Framework for Joint Learning of Sequence Labeling Tasks, forked from Pie'
 URL = 'https://github.com/lascivaroma/PaPie'
-AUTHOR = 'Enrique Manjavacas; Mike Kestemont; Thibault Clerice'
+AUTHOR = 'Enrique Manjavacas; Mike Kestemont; Thibault Clérice; Oriane Nedey'
 REQUIRES_PYTHON = '>=3.6.0'
 VERSION = "0.4.2"
 

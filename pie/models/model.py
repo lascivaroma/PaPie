@@ -65,6 +65,7 @@ class SimpleModel(BaseModel):
                  # kwargs
                  **kwargs):
         # args
+        super().__init__(label_encoder, tasks)
         self.wemb_dim = wemb_dim
         self.cemb_dim = cemb_dim
         self.hidden_size = hidden_size
@@ -83,7 +84,6 @@ class SimpleModel(BaseModel):
         self.linear_layers = linear_layers
         # only during training
         self.init_rnn = init_rnn
-        super().__init__(label_encoder, tasks)
 
         # Embeddings
         (self.wemb, self.cemb, self.merger), in_dim = build_embeddings(
@@ -483,7 +483,7 @@ class SimpleModel(BaseModel):
             print(f"The following pretrained params were not loaded into the model: {pretrained_params_nonloaded}"
                   f"{pretrained_params_nonloaded_str}")
 
-    def loss(self, batch_data, *target_tasks):
+    def compute_loss(self, batch_data, *target_tasks):
         ((word, wlen), (char, clen)), tasks = batch_data
         output = {}
 
@@ -544,6 +544,14 @@ class SimpleModel(BaseModel):
 
         return output
 
+    def training_step(self, batch, batch_idx: int):
+        batch_data, *target_tasks = batch
+        losses = self.compute_loss(batch_data, *target_tasks)
+        for task in losses:
+            self.log(f"train_{task}_loss", losses[task])
+
+        return losses
+
     def predict(self, inp, *tasks, return_probs=False,
                 use_beam=False, beam_width=10, **kwargs):
         """
@@ -599,30 +607,3 @@ class SimpleModel(BaseModel):
             return preds, probs
 
         return preds
-
-
-if __name__ == '__main__':
-    from pie.settings import settings_from_file
-    from pie.data import Dataset, Reader, MultiLabelEncoder
-
-    settings = settings_from_file('./config.json')
-    reader = Reader(settings, settings.input_path)
-    label_encoder = MultiLabelEncoder.from_settings(settings)
-    label_encoder.fit_reader(reader)
-    data = Dataset(settings, reader, label_encoder)
-    model = SimpleModel(data.label_encoder, settings.tasks,
-                        settings.wemb_dim, settings.cemb_dim,
-                        settings.hidden_size, settings.num_layers)
-    model.to(settings.device)
-
-    for batch in data.batch_generator():
-        model.loss(batch)
-        break
-    ((word, wlen), (char, clen)), tasks = next(data.batch_generator())
-    wemb, (cemb, cemb_outs) = model.wemb(word), model.cemb(char, clen, wlen)
-    emb = model.merger(wemb, cemb)
-    enc_outs = model.encoder(emb, wlen)
-    model.pos_decoder.predict(enc_outs, wlen)
-    lemma_hyps, _ = model.decoders['lemma'].predict_max(
-        cemb_outs, clen, context=torch_utils.flatten_padded_batch(enc_outs, wlen))
-    print(lemma_hyps)

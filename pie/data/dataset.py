@@ -720,10 +720,21 @@ class Dataset(object):
         self.minimize_pad = settings.minimize_pad
         self.cache_dataset = settings.cache_dataset
 
+        self.noise_strategies = {
+            strategy_name: strategy
+            for strategy_name, strategy in (settings.noise_strategies or {}).items()
+            if isinstance(strategy, dict) and strategy.get("apply") is True
+        }
         # data
         self.reader = reader
         self.label_encoder = label_encoder
         self.cached = []
+
+    def __iter__(self):
+        return self.batch_generator(apply_noise=self.noise_strategies)
+
+    def __len__(self):
+        return len(self.reader)
 
     @staticmethod
     def get_nelement(batch):

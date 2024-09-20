@@ -6,6 +6,7 @@ import logging
 import tqdm
 import torch
 import torch.nn as nn
+import lightning as L
 
 from pie import utils
 from pie.data import MultiLabelEncoder
@@ -14,11 +15,12 @@ from pie.settings import Settings
 from .scorer import Scorer, get_known_and_ambigous_tokens
 
 
-class BaseModel(nn.Module):
+class BaseModel(L.LightningModule):
     """
     Abstract model class defining the model interface
     """
     def __init__(self, label_encoder, tasks, *args, **kwargs):
+        super().__init__()
         self.label_encoder = label_encoder
         # prepare input task data from task settings
         if isinstance(tasks, list):
@@ -27,7 +29,6 @@ class BaseModel(nn.Module):
         self.known = set()
         self.ambs = {task: set() for task in tasks}
         self._fitted_trainset_scorer = False
-        super().__init__()
 
     def get_scorer(self, task, trainset=None):
         """ Given a task, gets a scorer. Trainset can be used for computing
