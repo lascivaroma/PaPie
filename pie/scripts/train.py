@@ -32,7 +32,7 @@ def get_fname_infix(settings):
     return fname, infix
 
 
-def run(settings, seed):
+def run(settings, seed=None):
     now = datetime.now()
 
     # set seed
@@ -64,7 +64,7 @@ def run(settings, seed):
 
     # label encoder
     labels_mode = settings.load_pretrained_model.get("labels_mode")
-    labels_mode_accepted = ["expand", "replace", "skip"]
+    labels_mode_accepted = ["expand", "replace_fill", "replace", "skip"]
     assert labels_mode in labels_mode_accepted, \
         f"Invalid value for labels_mode ({labels_mode}), accepted values are {labels_mode_accepted}"
     if settings.load_pretrained_model.get("pretrained") and labels_mode != "replace":
@@ -75,18 +75,51 @@ def run(settings, seed):
         )
         if settings.load_pretrained_model.get("labels_mode") == "expand":
             if settings.verbose:
-                print("::: Fitting/Expanding MultiLabelEncoder with data :::")
+                print("::: Fitting/Expanding MultiLabelEncoder with data (expand mode) :::")
                 print()
             label_encoder.fit_reader(reader, expand_mode=True)
+        elif settings.load_pretrained_model.get("labels_mode") == "replace_fill":
+            if settings.verbose:
+                print(":: Fitting MultiLabelEncoder with data, completing with parent vocab and labels (replace_fill mode) :::")
+                print()
+                print("Remark: During the vocab/labels completion phase, "
+                      "'original' vocab refers to the vocab extracted from the fine-tuning data, "
+                      "and 'new entries' refer to the vocab of the parent model"
+                )
+            # Fit with data
+            new_label_encoder = MultiLabelEncoder.from_settings(settings, tasks=tasks)
+            new_label_encoder.fit_reader(reader)
+            # Get parent labels to complete vocab/labels lists
+            parent_le_words = [
+                label for label in label_encoder.word.table.keys() 
+                if label not in label_encoder.word.reserved
+            ]
+            parent_tasks_labels = {}
+            for le in label_encoder.tasks.values():
+                parent_tasks_labels[le.target] = [
+                    label for label in le.table.keys()
+                    if label not in le.reserved
+                ]
+            # Disable min_freq temporarily (as parent labels will only get a freq of 1)
+            min_freqs_orig = {}
+            for le in new_label_encoder.all_label_encoders:
+                min_freqs_orig[le.target] = le.min_freq
+                le.min_freq = None
+            # Expand MultiLabelEncoder with parent vocab/labels
+            new_label_encoder.fit([(parent_le_words, parent_tasks_labels)], expand_mode=True)
+            label_encoder = new_label_encoder
+            # Reset min_freq values
+            for le in new_label_encoder.all_label_encoders:
+                le.min_freq = min_freqs_orig[le.target]
         else:  # "skip"
             if settings.verbose:
-                print("::: Fitting MultiLabelEncoder with data (unfitted LabelEncoders only) :::")
+                print("::: Fitting MultiLabelEncoder with data (unfitted LabelEncoders only) (skip mode) :::")
                 print()
             label_encoder.fit_reader(reader, skip_fitted=True)
     else:  # train from scratch or labels_mode== "replace"
         label_encoder = MultiLabelEncoder.from_settings(settings, tasks=tasks)
         if settings.verbose:
-            print("::: Fitting MultiLabelEncoder with data :::")
+            print("::: Fitting MultiLabelEncoder with data (replace mode) :::")
             print()
         label_encoder.fit_reader(reader)
 
@@ -227,15 +260,8 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('config_path', nargs='?', default='config.json')
-    parser.add_argument('--opt_path', help='Path to optimization file (see opt.json)')
-    parser.add_argument('--n_iter', type=int, default=20)
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
     settings = settings_from_file(args.config_path)
-
-    from pie import optimize
-    if args.opt_path:
-        opt = optimize.read_opt(args.opt_path)
-        optimize.run_optimize(run, settings, opt, args.n_iter)
-    else:
-        run(settings)
+    run(settings, args.seed)

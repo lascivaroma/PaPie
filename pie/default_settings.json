@@ -130,9 +130,10 @@
     "exclude": [],  // Modules to exclude from state_dict loading
     "labels_mode": "expand"  // mode for creating the MultiLabelEncoder (word/char + tasks vocabs). 
     // Options = {"expand", "skip", "replace"}:
-    // - "expand" expand existing pretrained label lists
+    // - "expand" expand existing pretrained label lists with labels from the finetuning data (remaining spots, consider increasing vocab sizes)
     // - "skip": only fit new encoders (for fine-tuning on a new task)
     // - "replace": fit a new MultiLabelEncoder only with the finetuning data
+    // - "replace_fill": fit a new MultiLabelEncoder with the finetuning data, then fill the remaining spots with parent labels
   }, 
 
   // * Optimization
