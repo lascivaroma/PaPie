@@ -213,29 +213,26 @@ class LabelEncoder(object):
         else:
             nb_indexes_left = None
 
-        # Get most common symbols (supposedly including new ones)
-        if self.min_freq:
-            most_common = [it for it in self.freqs.items() if it[1] >= self.min_freq]
-        else:
-            most_common = self.freqs.most_common()
-
-        # Extract only the new symbols
+        # Get all new symbols, ordered by frequency
         set_original_vocab = set(self.inverse_table)
+        new_symbols = [
+            (s, freq) for s, freq in self.freqs.most_common() 
+            if s not in set_original_vocab
+        ]
+        if self.min_freq:
+            new_symbols = [(s, freq) for s, freq in new_symbols if freq >= self.min_freq]
+        # Extract only the desired number of new symbols
+        if nb_indexes_left:
+            new_symbols = new_symbols[:nb_indexes_left]
+        # Append new symbols to the LabelEncoder's vocab attributes
         cur_table_idx = max(self.table.values())
-        nb_new_symbols = 0
-        for sym, _ in most_common:
-            if nb_indexes_left == 0:
-                break
-            if sym not in set_original_vocab:
-                nb_new_symbols += 1
-                self.inverse_table.append(sym)
-                cur_table_idx += 1
-                self.table[sym] = cur_table_idx
-                if nb_indexes_left is not None:
-                    nb_indexes_left -= 1
+        for sym, _ in new_symbols:
+            self.inverse_table.append(sym)
+            cur_table_idx += 1
+            self.table[sym] = cur_table_idx
 
         self.fitted = True
-        logger.info(f"Added {nb_new_symbols} new entries to the vocabulary of label_encoder '{self.name}'")
+        logger.info(f"Added {len(new_symbols)} new entries to the vocabulary of label_encoder '{self.name}'")
     
     def register_upper(self):
         """ Params registers the same vocabulary but in full uppercase

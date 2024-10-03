@@ -82,35 +82,41 @@ def run(settings, seed=None):
             if settings.verbose:
                 print(":: Fitting MultiLabelEncoder with data, completing with parent vocab and labels (replace_fill mode) :::")
                 print()
-                print("Remark: During the vocab/labels completion phase, "
-                      "'original' vocab refers to the vocab extracted from the fine-tuning data, "
-                      "and 'new entries' refer to the vocab of the parent model"
-                )
-            # Fit with data
+            # Fit a new MultiLabelEncoder with the finetuning data
             new_label_encoder = MultiLabelEncoder.from_settings(settings, tasks=tasks)
             new_label_encoder.fit_reader(reader)
-            # Get parent labels to complete vocab/labels lists
-            parent_le_words = [
-                label for label in label_encoder.word.table.keys() 
-                if label not in label_encoder.word.reserved
-            ]
-            parent_tasks_labels = {}
-            for le in label_encoder.tasks.values():
-                parent_tasks_labels[le.target] = [
-                    label for label in le.table.keys()
-                    if label not in le.reserved
-                ]
-            # Disable min_freq temporarily (as parent labels will only get a freq of 1)
-            min_freqs_orig = {}
-            for le in new_label_encoder.all_label_encoders:
-                min_freqs_orig[le.target] = le.min_freq
-                le.min_freq = None
-            # Expand MultiLabelEncoder with parent vocab/labels
-            new_label_encoder.fit([(parent_le_words, parent_tasks_labels)], expand_mode=True)
+
+            # Update frequencies with parent LabelEncoders
+            for le in label_encoder.all_label_encoders:
+                # Skip parent model's tasks that are not in the finetuning config
+                if le.name not in ["word", "char"] and le.name not in new_label_encoder.tasks:
+                    continue
+                # Get the new LabelEncoder to update
+                if le.name == "word":
+                    new_le = new_label_encoder.word
+                elif le.name == "char":
+                    new_le = new_label_encoder.char
+                else:
+                    new_le = new_label_encoder.tasks[le.name]
+                # Update frequencies of the new LabelEncoder
+                new_le.freqs.update(le.freqs)
+                # Update known_tokens if it is a char-based LabelEncoder
+                assert le.level == new_le.level, \
+                    (f"LabelEncoder levels should be the same between the parent "
+                     f"and the child models, found {le.level} and {new_le.level}")
+                if new_le.level != "token":
+                    new_le.known_tokens.update(le.known_tokens)
+                # Expand vocab
+                new_le.fitted = False
+                new_le.expand_vocab()
+            
+            # Update uppercase vocab entries
+            if new_label_encoder.noise_strategies["uppercase"]["apply"]:
+                new_label_encoder.word.register_upper()
+                new_label_encoder.char.register_upper()
+
+            # Replace parent label_encoder with the child new_label_encoder
             label_encoder = new_label_encoder
-            # Reset min_freq values
-            for le in new_label_encoder.all_label_encoders:
-                le.min_freq = min_freqs_orig[le.target]
         else:  # "skip"
             if settings.verbose:
                 print("::: Fitting MultiLabelEncoder with data (unfitted LabelEncoders only) (skip mode) :::")
