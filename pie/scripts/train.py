@@ -125,7 +125,10 @@ def run(settings, seed=None):
     else:  # train from scratch or labels_mode== "replace"
         label_encoder = MultiLabelEncoder.from_settings(settings, tasks=tasks)
         if settings.verbose:
-            print("::: Fitting MultiLabelEncoder with data (replace mode) :::")
+            if settings.load_pretrained_model.get("pretrained"):
+                print("::: Fitting MultiLabelEncoder with data (replace mode) :::")
+            else:
+                print("::: Fitting MultiLabelEncoder with data :::")
             print()
         label_encoder.fit_reader(reader)
 
