@@ -159,13 +159,13 @@ class LabelEncoder(object):
         # Sort freqs by order of frequency, and alphabetically in case of ties
         vocab = sorted(self.freqs.most_common(), key=lambda x: (-x[1], x[0]))
 
-        # Apply max_size
-        if self.max_size:
-            vocab = vocab[:self.max_size]
-
         # Apply min_freq
         if self.min_freq:
             vocab = [it for it in vocab if it[1] >= self.min_freq]
+
+        # Apply max_size
+        if self.max_size:
+            vocab = vocab[:self.max_size]
         
         # Remove frequencies
         vocab = [sym for sym, _ in vocab]
