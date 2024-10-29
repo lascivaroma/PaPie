@@ -156,14 +156,21 @@ class LabelEncoder(object):
             logging.warning("Computing vocabulary for empty encoder {}"
                             .format(self.name))
 
-        if self.max_size:
-            most_common = self.freqs.most_common(n=self.max_size)
-        elif self.min_freq:
-            most_common = [it for it in self.freqs.items() if it[1] >= self.min_freq]
-        else:
-            most_common = self.freqs.most_common()
+        # Sort freqs by order of frequency, and alphabetically in case of ties
+        vocab = sorted(self.freqs.most_common(), key=lambda x: (-x[1], x[0]))
 
-        self.inverse_table = list(self.reserved) + [sym for sym, _ in most_common]
+        # Apply max_size
+        if self.max_size:
+            vocab = vocab[:self.max_size]
+
+        # Apply min_freq
+        if self.min_freq:
+            vocab = [it for it in vocab if it[1] >= self.min_freq]
+        
+        # Remove frequencies
+        vocab = [sym for sym, _ in vocab]
+
+        self.inverse_table = list(self.reserved) + vocab
         self.table = {sym: idx for idx, sym in enumerate(self.inverse_table)}
         self.fitted = True
 
