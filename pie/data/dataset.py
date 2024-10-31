@@ -257,14 +257,17 @@ class LabelEncoder(object):
             t = len(self.inverse_table)
             r = len(self.reserved)
             slots_left = self.max_size - t - r
-            if slots_left > 0:
-                new_chars = new_chars[:min(len(new_chars), slots_left)]
+            if slots_left > 0:                
                 if slots_left < len(new_chars):
                     logger.info(f"Could not register all available uppercase vocab entries "
                                 f"({slots_left} slots < {len(new_chars)} upper chars)")
                 else:
                     logger.info(f"All uppercase ({self.name}) vocab registered ({len(new_chars)} new entries)")
+                new_chars = new_chars[:min(len(new_chars), slots_left)]
             else:
+                if len(new_chars) > 0:
+                    logger.info(f"Could not register all available uppercase vocab entries "
+                                f"({len(new_chars)} upper chars not registered)")
                 return # We have too much in the vocab already
         
         # Add new chars to the vocabulary
