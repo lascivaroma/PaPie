@@ -101,11 +101,12 @@ def evaluate(model_path, test_path, train_path, settings, batch_size,
 
 @pie_cli.command("train")
 @click.argument('config_path')
-def train(config_path):
+@click.option('--seed', type=int, default=None)
+def train(config_path, seed):
     """ Train a model using the file at [CONFIG_PATH]"""
     import pie.scripts.train
     import pie.settings
-    pie.scripts.train.run(pie.settings.settings_from_file(config_path))
+    pie.scripts.train.run(pie.settings.settings_from_file(config_path), seed)
 
 
 @pie_cli.command("info")

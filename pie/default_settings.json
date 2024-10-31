@@ -6,6 +6,7 @@
   // * General
   "modelname": "model", // model name to be used for saving
   "modelpath": "./", // model path to be used for saving
+  "seed": "auto", // set a seed number or 'auto' to let the training script define it
 
   // * Data
   "input_path": "", // path (unix-like expression) to files with training data
@@ -100,7 +101,7 @@
   // general task schedule params (can be overwritten in the "settings" entry of each)
   "patience": 100, // task patience (global early stopping patience for target task)
   "factor": 1, // default task schedule factor
-  "threshold": 0, // default task schedule thresholed
+  "threshold": 0, // default task schedule threshold
   "min_weight": 0, // default task schedule min_weight
 
   // * Joint LM-loss
@@ -124,6 +125,16 @@
   "load_pretrained_embeddings": "", // file with pretrained embeddings in word2vec format
   "load_pretrained_encoder": "", // path to file with pretrained sentence encoder
   "freeze_embeddings": false, // whether to freeze the word embeddings
+  "load_pretrained_model": {  // config to load a pretrained model
+    "pretrained": "", // Path to the .tar file with the pretrained model
+    "exclude": [],  // Modules to exclude from state_dict loading
+    "labels_mode": "expand"  // mode for creating the MultiLabelEncoder (word/char + tasks vocabs). 
+    // Options = {"expand", "skip", "replace"}:
+    // - "expand" expand existing pretrained label lists with labels from the finetuning data (remaining spots, consider increasing vocab sizes)
+    // - "skip": only fit new encoders (for fine-tuning on a new task)
+    // - "replace": fit a new MultiLabelEncoder only with the finetuning data
+    // - "replace_fill": fit a new MultiLabelEncoder with the finetuning data, then fill the remaining spots with parent labels
+  }, 
 
   // * Optimization
   "dropout": 0.0, // dropout
