@@ -169,7 +169,7 @@ class LabelEncoder(object):
 
         # Apply max_size
         if self.max_size:
-            vocab = vocab[:self.max_size]
+            vocab = vocab[:self.max_size-len(self.reserved)]
         
         # Remove frequencies
         vocab = [sym for sym, _ in vocab]
@@ -183,11 +183,11 @@ class LabelEncoder(object):
             raise ValueError("Cannot expand vocabulary, already fitted")
         
         # Check if there is room to add new symbols
-        size_original_vocab_noreserved = len(self.inverse_table) - len(self.reserved)
-        logger.info(f"Original '{self.name}' vocab contains {size_original_vocab_noreserved} "
+        # size_original_vocab_noreserved = len(self.inverse_table) - len(self.reserved)
+        logger.info(f"Original '{self.name}' vocab contains {len(self.inverse_table) - len(self.reserved)} "
                     "entries (reserved not included)")
         if self.max_size:
-            nb_indexes_left = self.max_size - size_original_vocab_noreserved
+            nb_indexes_left = self.max_size - len(self.inverse_table)
             if nb_indexes_left == 0:
                 logger.warning(
                     f"No room left for new vocab entries in label_encoder '{self.name}', "
@@ -199,14 +199,14 @@ class LabelEncoder(object):
             elif nb_indexes_left < 0:
                 nb_indexes_to_remove = -nb_indexes_left
                 logger.warning(
-                    f"Size of the original vocabulary is larger than max_size "
-                    f"({size_original_vocab_noreserved} > {self.max_size}: "
+                    f"Size of the original vocabulary (incl. reserved) is larger than max_size "
+                    f"({len(self.inverse_table)} > {self.max_size}: "
                     f"removing {nb_indexes_to_remove} entries to the vocabulary"
                 )
-                self.inverse_table = self.inverse_table[:self.max_size+len(self.reserved)]
+                self.inverse_table = self.inverse_table[:self.max_size]
                 self.table = {
                     sym: idx for i, (sym, idx) in enumerate(self.table.items())
-                    if i < self.max_size+len(self.reserved)
+                    if i < self.max_size
                 }
                 self.fitted = True
                 return
@@ -218,9 +218,8 @@ class LabelEncoder(object):
         new_symbols = [
             (s, freq) for s, freq in self.freqs.most_common() 
             if s not in set_original_vocab
+            and freq >= (self.min_freq or 0)
         ]
-        if self.min_freq:
-            new_symbols = [(s, freq) for s, freq in new_symbols if freq >= self.min_freq]
         # Extract only the desired number of new symbols
         if nb_indexes_left:
             new_symbols = new_symbols[:nb_indexes_left]
@@ -254,9 +253,7 @@ class LabelEncoder(object):
 
         # Reduce list of new chars to the number of available slots
         if self.max_size:
-            t = len(self.inverse_table)
-            r = len(self.reserved)
-            slots_left = self.max_size - t - r
+            slots_left = self.max_size - len(self.inverse_table)
             if slots_left > 0:                
                 if slots_left < len(new_chars):
                     logger.info(f"Could not register all available uppercase vocab entries "
