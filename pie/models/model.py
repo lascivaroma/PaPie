@@ -359,7 +359,7 @@ class SimpleModel(BaseModel):
         # This is done word by word as the vocabularies may differ between both models
         # For each word of the pretrained model label encoder, if the word is also in the current label encoder,
         # Copy the corresponding weight into the model wemb layer parameters
-        if "wemb.emb.weight" in state_dict_pretrained:
+        if "wemb" in model_parts_to_load and "wemb.emb.weight" in state_dict_pretrained:
             module_name = "wemb"
             load_stats = load_state_dict_label_by_label(
                 self.wemb,
@@ -371,15 +371,16 @@ class SimpleModel(BaseModel):
             model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
         
         # Character embeddings (cemb.emb)
-        module_name = "cemb.emb"
-        load_stats = load_state_dict_label_by_label(
-            self.cemb.emb,
-            module_name,
-            "char",
-            label_encoder_pretrained,
-            state_dict_pretrained
-        )
-        model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
+        if "cemb" in model_parts_to_load:
+            module_name = "cemb.emb"
+            load_stats = load_state_dict_label_by_label(
+                self.cemb.emb,
+                module_name,
+                "char",
+                label_encoder_pretrained,
+                state_dict_pretrained
+            )
+            model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
 
         # Load state_dict of the character-level RNN encoder
         if "cemb_rnn" in model_parts_to_load:
@@ -419,8 +420,10 @@ class SimpleModel(BaseModel):
             )
             model_params_loaded.extend([f"{module_name}.{p}" for p in load_stats['params_updated']])
 
-        # Fill tasks-specific params - WARNING DEPENDS ON THE TYPE OF TASK=DECODER
+        # Fill tasks-specific params - depends on the type of task (i.e. type of decoder)
         for tname in self.tasks.keys():
+            if tname not in model_parts_to_load:
+                continue
             if tname not in label_encoder_pretrained.tasks:
                 # lowercase all tasks then look again
                 found_normalized_task = False
