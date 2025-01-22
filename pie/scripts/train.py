@@ -152,8 +152,28 @@ def run(settings):
         model.eval()
     running_time = time.time() - running_time
 
+    # evaluate best model on devset
+    if settings.dev_path:
+        print()
+        print("Evaluating best model on dev set...")
+        print()
+        model.eval()
+        stored_scores = {}
+        with torch.no_grad():
+            dev_loss = trainer.evaluate(devset)
+            print()
+            print("::: Dev losses :::")
+            print()
+            print('\n'.join('{}: {:.4f}'.format(k, v) for k, v in dev_loss.items()))
+            print()
+            summary = model.evaluate(devset, trainer.dataset)
+            for task_name, scorer in summary.items():
+                stored_scores[task_name] = scorer.get_scores()
+                scorer.print_summary(scores=stored_scores[task_name])
+
+    # evaluate best model on test set
     if settings.test_path:
-        print("Evaluating model on test set")
+        print("Evaluating best model on test set")
         try:
             testset = Dataset(settings, Reader(settings, settings.test_path), label_encoder)
             for task in model.evaluate(testset, trainset).values():
