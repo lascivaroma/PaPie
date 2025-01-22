@@ -22,11 +22,14 @@ def get_targets(settings):
     return [task['name'] for task in settings.tasks if task.get('target')]
 
 
-def get_fname_infix(settings):
+def get_fname_infix(settings, epoch=None):
     # fname
     fname = os.path.join(settings.modelpath, settings.modelname)
     timestamp = datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
-    infix = '+'.join(get_targets(settings)) + '-' + timestamp
+    infix = '+'.join(get_targets(settings))
+    if epoch:
+        infix += f"-{epoch}"
+    infix += '-' + timestamp
     return fname, infix
 
 
@@ -181,12 +184,6 @@ def run(settings):
         except Exception as E:
             print(E)
 
-    # save model
-    fpath, infix = get_fname_infix(settings)
-    if not settings.run_test:
-        fpath = model.save(fpath, infix=infix, settings=settings)
-        print("Saved best model to: [{}]".format(fpath))
-
     if devset is not None and not settings.run_test:
         scorers = model.evaluate(devset, trainset)
         scores = []
@@ -201,9 +198,23 @@ def run(settings):
         path = '{}.results.{}.csv'.format(
             settings.modelname, '-'.join(get_targets(settings)))
         with open(path, 'a') as f:
+            _, infix = get_fname_infix(settings)
             line = [infix, str(seed), str(running_time)]
             line += scores
             f.write('{}\n'.format('\t'.join(line)))
+
+    # save model
+    if not settings.run_test:
+        # Save best model
+        fpath, infix = get_fname_infix(settings, epoch="best")
+        fpath = model.save(fpath, infix=infix, settings=settings)
+        print("Saved best model to: [{}]".format(fpath))
+        # Save last model
+        if "last_state_dict" in model.__dict__:
+            model.load_state_dict(model.last_state_dict)
+            fpath, infix = get_fname_infix(settings, epoch="last")
+            fpath = model.save(fpath, infix=infix, settings=settings)
+            print("Saved last model to: [{}]".format(fpath))
 
     print("Bye!")
 
