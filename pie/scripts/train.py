@@ -270,7 +270,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('config_path', nargs='?', default='config.json')
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument('--opt_path', help='Path to optimization file (see opt.json)')
+    parser.add_argument('--n_iter', type=int, default=20, help="Number of iterations for the optimization mode")
     args = parser.parse_args()
 
     settings = settings_from_file(args.config_path)
-    run(settings, args.seed)
+
+    from pie import optimize
+
+    if args.opt_path:
+        opt = optimize.read_opt(args.opt_path)
+        optimize.run_optimize(run, settings, opt, args.n_iter)
+    else:
+        run(settings, args.seed)
