@@ -33,7 +33,9 @@ If you find `pie` useful, please use the following reference:
 
 ## 1. Installation
 
-PIE is available from pypi (`pip install nlp-pie`), yet this fork has no published package on PyPI, so you should do:
+PIE is available from pypi: `pip install PaPie`
+
+You can also install it from source:
 
 ```bash
 git clone https://github.com/lascivaroma/PaPie.git
