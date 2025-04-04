@@ -1,21 +1,25 @@
-import warnings
-from functools import partial
-import tarfile
 import json
+import logging
+import random
+import tarfile
+import warnings
+from collections import Counter, defaultdict
+from copy import deepcopy
+from functools import partial
+from typing import Dict, List, Union, Tuple, Any
+
+import torch
 import yaml
 try:
     from yaml import CLoader as Loader, CDumper as Dumper
 except ImportError:
     from yaml import Loader, Dumper
-import logging
-from collections import Counter, defaultdict
-import random
-from typing import Dict, List, Union, Tuple, Any
 
-import torch
 
 from pie import utils, torch_utils, constants
 from . import preprocessors
+
+logger = logging.getLogger(__name__)
 
 # Typing utilities
 Sentence = List[str]
@@ -153,7 +157,7 @@ class LabelEncoder(object):
             raise ValueError("Cannot compute vocabulary, already fitted")
 
         if len(self.freqs) == 0:
-            logging.warning("Computing vocabulary for empty encoder {}"
+            logger.warning("Computing vocabulary for empty encoder {}"
                             .format(self.name))
 
         # Sort freqs by order of frequency, and alphabetically in case of ties
@@ -165,7 +169,7 @@ class LabelEncoder(object):
 
         # Apply max_size
         if self.max_size:
-            vocab = vocab[:self.max_size]
+            vocab = vocab[:self.max_size-len(self.reserved)]
         
         # Remove frequencies
         vocab = [sym for sym, _ in vocab]
@@ -174,11 +178,67 @@ class LabelEncoder(object):
         self.table = {sym: idx for idx, sym in enumerate(self.inverse_table)}
         self.fitted = True
 
+    def expand_vocab(self):
+        if self.fitted:
+            raise ValueError("Cannot expand vocabulary, already fitted")
+        
+        # Check if there is room to add new symbols
+        # size_original_vocab_noreserved = len(self.inverse_table) - len(self.reserved)
+        logger.info(f"Original '{self.name}' vocab contains {len(self.inverse_table) - len(self.reserved)} "
+                    "entries (reserved not included)")
+        if self.max_size:
+            nb_indexes_left = self.max_size - len(self.inverse_table)
+            if nb_indexes_left == 0:
+                logger.warning(
+                    f"No room left for new vocab entries in label_encoder '{self.name}', "
+                    f"Consider increasing max_size (currently {self.max_size}) to be able "
+                    f"to expand the vocabulary with new symbols."
+                )
+                self.fitted = True
+                return
+            elif nb_indexes_left < 0:
+                nb_indexes_to_remove = -nb_indexes_left
+                logger.warning(
+                    f"Size of the original vocabulary (incl. reserved) is larger than max_size "
+                    f"({len(self.inverse_table)} > {self.max_size}: "
+                    f"removing {nb_indexes_to_remove} entries to the vocabulary"
+                )
+                self.inverse_table = self.inverse_table[:self.max_size]
+                self.table = {
+                    sym: idx for i, (sym, idx) in enumerate(self.table.items())
+                    if i < self.max_size
+                }
+                self.fitted = True
+                return
+        else:
+            nb_indexes_left = None
+
+        # Get all new symbols, ordered by frequency
+        set_original_vocab = set(self.inverse_table)
+        new_symbols = [
+            (s, freq) for s, freq in self.freqs.most_common() 
+            if s not in set_original_vocab
+            and freq >= (self.min_freq or 0)
+        ]
+        # Extract only the desired number of new symbols
+        if nb_indexes_left:
+            new_symbols = new_symbols[:nb_indexes_left]
+        # Append new symbols to the LabelEncoder's vocab attributes
+        cur_table_idx = max(self.table.values())
+        for sym, _ in new_symbols:
+            self.inverse_table.append(sym)
+            cur_table_idx += 1
+            self.table[sym] = cur_table_idx
+
+        self.fitted = True
+        logger.info(f"Added {len(new_symbols)} new entries to the vocabulary of label_encoder '{self.name}'")
+    
     def register_upper(self):
         """ Params registers the same vocabulary but in full uppercase
 
         Important when using the upper strategy
         """
+        # Get all new uppercase chars of lowercase chars in the vocab
         inp = self.inverse_table[len(self.reserved):]
         new_chars = list(map(
             lambda x: x.upper(),
@@ -187,13 +247,27 @@ class LabelEncoder(object):
                 inp
             )
         ))
+
+        # Remove duplicates (in rare cases, multiple lowercase chars can have the same uppercasing)
+        new_chars = list(dict.fromkeys(new_chars))
+
+        # Reduce list of new chars to the number of available slots
         if self.max_size:
-            t = len(self.inverse_table)
-            r = len(self.reserved)
-            if (self.max_size - t - r) > 0:
-                new_chars = new_chars[:min(len(new_chars), self.max_size-t-r)]
+            slots_left = self.max_size - len(self.inverse_table)
+            if slots_left > 0:                
+                if slots_left < len(new_chars):
+                    logger.info(f"Could not register all available uppercase {self.name} vocab entries "
+                                f"({slots_left} slots < {len(new_chars)} upper chars)")
+                else:
+                    logger.info(f"All uppercase ({self.name}) vocab registered ({len(new_chars)} new entries)")
+                new_chars = new_chars[:min(len(new_chars), slots_left)]
             else:
+                if len(new_chars) > 0:
+                    logger.info(f"Could not register all available uppercase vocab entries "
+                                f"({len(new_chars)} upper {self.name} entries not registered)")
                 return # We have too much in the vocab already
+        
+        # Add new chars to the vocabulary
         self.inverse_table.extend(new_chars)
         self.table = {sym: idx for idx, sym in enumerate(self.inverse_table)}
 
@@ -323,7 +397,7 @@ class LabelEncoder(object):
     def from_json(cls, obj):
         inst = cls(pad=obj['pad'], eos=obj['eos'], bos=obj['bos'],
                    level=obj['level'], target=obj['target'], lower=obj['lower'],
-                   max_size=obj['max_size'], min_freq=['min_freq'],
+                   max_size=obj['max_size'], min_freq=obj['min_freq'],
                    drop_diacritics=obj.get('drop_diacritics', False),
                    utfnorm=obj.get('utfnorm', False),
                    utfnorm_type=obj.get('utfnorm_type', False),
@@ -357,6 +431,10 @@ class MultiLabelEncoder(object):
         self.tasks = {}
         self.nsents = None
         self.noise_strategies = noise_strategies or {}
+
+    @property
+    def all_label_encoders(self):
+        return [self.word, self.char] + list(self.tasks.values())
 
     def __repr__(self):
         return (
@@ -412,41 +490,74 @@ class MultiLabelEncoder(object):
 
         return le
 
-    def fit(self, lines):
+    def fit(self, lines, expand_mode=False, skip_fitted=False):
         """
+        Fit all LabelEncoder objects contained in this instance on the given data to create their label-to-id tables
+
         Parameters
         ===========
-        lines : iterator over tuples of (Input, Tasks)
+        lines (iterator): tuples of (Input, Tasks)
+        expand_mode (bool): True to continue fitting all LabelEncoders with new data,
+            keeping all labels already assigned and adding new ones as seen in the new data.
+        skip_fitted (bool): True to skip already fitted label encoders instead of raising an error.
+            skip_fitted and expand_mode are exclusive.
         """
-        for idx, inp in enumerate(lines):
+        assert not (expand_mode and skip_fitted), "parameters expand_mode and skip_fitted are exclusive"
+        lencs_to_update = self.all_label_encoders
+        if expand_mode is True:
+            lencs_to_expand = [le for le in lencs_to_update if le.fitted is True]
+            lencs_to_fit = [le for le in lencs_to_update if le not in lencs_to_expand]
+            if lencs_to_fit:
+                logger.warning(
+                    f"Expanding only the label encoders {lencs_to_expand} "
+                    f"and fitting the rest from scratch {lencs_to_fit}")
+            for le in lencs_to_expand:
+                le.fitted = False
+        else:
+            if skip_fitted:
+                lencs_to_update = [le for le in lencs_to_update if le.fitted is False]
+                if not lencs_to_update:
+                    logger.info("All label encoders have been fitted already !")
+                    return self
+            lencs_to_expand = []
+            lencs_to_fit = lencs_to_update
+
+        for inp in lines:
             tasks = None
             if isinstance(inp, tuple):
                 inp, tasks = inp
 
             # input
-            self.word.add(inp)
-            self.char.add(inp)
+            if self.word in lencs_to_update:
+                self.word.add(inp)
+            if self.char in lencs_to_update:
+                self.char.add(inp)
 
             for le in self.tasks.values():
+                if le not in lencs_to_update:
+                    continue
                 le.add(tasks[le.target], inp)
 
-        self.word.compute_vocab()
-        self.char.compute_vocab()
+        for le in lencs_to_fit:
+            le.compute_vocab()
+        
+        for le in lencs_to_expand:
+            le.expand_vocab()
 
         if self.noise_strategies["uppercase"]["apply"]:
             self.word.register_upper()
             self.char.register_upper()
 
-        for le in self.tasks.values():
-            le.compute_vocab()
-
         return self
 
-    def fit_reader(self, reader):
+    def fit_reader(self, reader, expand_mode=False, skip_fitted=False):
         """
         fit reader in a non verbose way (to warn about parsing issues)
         """
-        return self.fit(line for (_, line) in reader.readsents(silent=False))
+        return self.fit(
+            (line for (_, line) in reader.readsents(silent=False)),
+            expand_mode=expand_mode,
+            skip_fitted=skip_fitted)
 
     def transform(self, sents: Union[List[Sentence], List[Tuple[Sentence, DictGT]]]):
         """
@@ -525,9 +636,66 @@ class MultiLabelEncoder(object):
             return cls.load_from_string(f.read())
 
     @classmethod
-    def load_from_pretrained_model(cls, path):
+    def load_from_pretrained_model(cls, path, new_settings=None, tasks=None):
+
+        def copy_pretrained_le(pretrained_le, new_le):
+            new_attrs_to_keep = deepcopy({
+                "lower": new_le.lower,
+                "utfnorm": new_le.utfnorm,
+                "utfnorm_type": new_le.utfnorm_type,
+                "drop_diacritics": new_le.drop_diacritics,
+                "text_preprocess_fn": new_le.text_preprocess_fn,
+                "preprocessor": new_le.preprocessor,
+                "preprocessor_fn": new_le.preprocessor_fn,
+                "max_size": new_le.max_size,
+                "min_freq": new_le.min_freq,
+                "target": new_le.target
+            })
+            new_le = deepcopy(pretrained_le)
+            for attr_key, attr_val in new_attrs_to_keep.items():
+                setattr(new_le, attr_key, attr_val)
+            
+            return new_le
+
         with tarfile.open(utils.ensure_ext(path, 'tar'), 'r') as tar:
-            return cls.load_from_string(utils.get_gzip_from_tar(tar, 'label_encoder'))
+            label_encoder_pretrained = cls.load_from_string(utils.get_gzip_from_tar(tar, 'label_encoder.zip'))
+        
+        if not new_settings:
+            return label_encoder_pretrained
+        else:
+            # Create another MultiLabelEncoder to import the new settings
+            # As the saved pretrained MultiLabelEncoder doesn't contain all settings,
+            # for instance noise strategies
+            new_multilabel_encoder = MultiLabelEncoder.from_settings(new_settings, tasks=tasks)
+
+            new_multilabel_encoder.word = copy_pretrained_le(
+                label_encoder_pretrained.word, new_multilabel_encoder.word)
+            new_multilabel_encoder.char = copy_pretrained_le(
+                label_encoder_pretrained.char, new_multilabel_encoder.char)
+
+            for tname in tasks:
+                task_name = tname
+                if task_name in label_encoder_pretrained.tasks:
+                    new_multilabel_encoder.tasks[task_name] = copy_pretrained_le(
+                        label_encoder_pretrained.tasks[task_name], new_multilabel_encoder.tasks[task_name])
+                else:
+                    # search with lowercased tasks
+                    found_normalized_task = False
+                    for pretrained_task_name, pretrained_task_le in label_encoder_pretrained.tasks.items():
+                        if task_name.lower() == pretrained_task_name.lower():
+                            new_multilabel_encoder.tasks[task_name] = copy_pretrained_le(
+                                pretrained_task_le, new_multilabel_encoder.tasks[task_name])
+                            new_multilabel_encoder.tasks[task_name].name = task_name
+                            found_normalized_task = True
+                            logger.warning(
+                                f"Task {task_name} not found in the pretrained label encoder, "
+                                f"but {pretrained_task_name} was found and will be loaded in "
+                                f"task {task_name}.")
+                            break
+                    if not found_normalized_task:
+                        logger.warning(f"Task {task_name} not found in the pretrained label encoder.")
+            
+            return new_multilabel_encoder
 
 
 class Dataset(object):

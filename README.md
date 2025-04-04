@@ -33,11 +33,16 @@ If you find `pie` useful, please use the following reference:
 
 ## 1. Installation
 
-PIE is available from pypi, which means that all you should need to do is:
+PIE is available from pypi: `pip install PaPie`
+
+You can also install it from source:
 
 ```bash
-pip install nlp-pie
+git clone https://github.com/lascivaroma/PaPie.git
+cd PaPie
+pip install .
 ```
+
 
 ### For development
 
@@ -147,6 +152,8 @@ Training a model only requires a model specification and paths to training and d
   "cemb_layers": 2
 }
 ```
+
+All options as well as default values are stored in [`./pie/default_settings.json`](./pie/default_settings.json)
 
 The very minimum set of options required to train a model includes `input_path` (path to files with training data), `dev_path` (path to files with development data), and `tasks`, which defines the model to be trained. Other parameters refer to model hyperparameters (`cell`, `num_layers`, `hidden_size`, `wemb_dim`, `cemb_dim`, `cemb_type`, `cemb_layers`), training (`batch_size`, `epochs`) and optimization (`dropout`, `optimizer`, `patience`, `lr`, `lr_factor`, `lr_patience).
 
@@ -288,3 +295,41 @@ Multi-task learning consists on jointly training a model for different tasks whi
 Additionally, it is also important, in case of a multi-layer sentence-level feature extractor, to select at what layer a particular task can help the most (this can be controlled with the "layer" option).
 
 Finally, multi-task learning is far from being a silver bullet and it is an empirical question whether a multi-task learning setup will yield improvements. It is recommended to first train a single model, and then try different multi-task learning configuration to see if improvements can be achieved.
+
+## 9. Fine-tuning [New !]
+
+Fine-tuning a PIE model (for cases like domain adaptation or transfer to a similar language for instance) is possible with the option `load_pretrained_model` of the config file.
+
+For example:
+
+```json
+{
+  "load_pretrained_model": {
+      "pretrained": "path/to/pie_model.tar",
+      "labels_mode": "replace",
+      "exclude": ["pos"]
+  },
+}
+```
+
+Sub-option **"labels_mode"** indicates how to adapt the vocabularies of the parent model (characters, words, target labels) for the child model. Available values are:
+- *"replace"*: do not use the parent vocabularies, instead compute new ones from the finetuning data and use them
+- *"expand"* (default): keep all parent vocabularies, and if the values indicated by options `word_max_size`, `char_max_size`, `word_min_freq` and `char_min_freq` permit it, append new entries (chars/words/labels) based on the finetuning data (`input_data`)
+  - *e.g. the parent model was trained on 1M words, `word_max_size` was set to 10000 and the vocabulary contains 9000 words. You can finetune with `"labels_mode": "expand"` and `"word_max_size": 10000` to include 1000 new words, or increase `"word_max_size": 20000` to include more new words from the finetuning data*
+- *"replace_fill"*: similar to "expand", except we first replace the vocabulary with a new one computed from the finetuning data, and then we fill the seats left with the parent vocabularies (in order of frequency, depending on options `word_max_size`, `char_max_size`, `word_min_freq` and `char_min_freq`)
+- *"skip"*: keep all parent vocabularies, and only set new ones if the child model will be trained on new task(s)
+  - *e.g. the parent model was trained for POS tagging and the child model will be trained for lemmatization. The parent model does not have a target characters vocabulary for the lemmatization task, so PIE will create only this one, and keep the parent ones for the rest (input characters, words)*
+
+Sub-option **"exclude"** can be used to control which layers (state_dict weights) should be loaded or not. Possible values are: "wemb", "cemb", "cemb_rnn", "sent_rnn", "lm" as well as any target task (e.g. "pos", "lemma"). Excluded modules will be left with the default initialization until training starts.
+
+The config options related to the model architecture (`wemb_dim`, `cemb_dim`, `cemb_type`, `cemb_layers`, `linear_layers`, `hidden_size`, `num_layers` and `cell`) must be the same as the parent model. You can run the following scrip to get this information:
+
+```bash
+python ./scripts/get_pie_model_params.py path/to/model.tar
+```
+
+The fine-tuning command is the same as for training: 
+
+```bash
+pie train path/to/config.json
+```
