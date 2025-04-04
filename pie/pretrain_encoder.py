@@ -147,20 +147,10 @@ class Encoder(nn.Module):
                 torch.save(self.state_dict(), tmppath)
                 tar.add(tmppath, arcname='state_dict.pt')
 
-            # serialize current pie commit
-            string, path = pie.__commit__, 'pie-commit.zip'
-            utils.add_gzip_to_tar(string, path, tar)
 
     @classmethod
     def load(cls, path):
         with tarfile.open(utils.ensure_ext(path, 'tar'), 'r') as tar:
-            commit = utils.get_gzip_from_tar(tar, 'pie-commit.zip')
-            if pie.__commit__ != commit:
-                logging.warn(
-                    ("Model {} was serialized with a previous "
-                     "version of `pie`. This might result in issues. "
-                     "Model commit is {}, whereas current `pie` commit is {}."
-                    ).format(path, commit, pie.__commit__))
 
             # load label encoder
             le = pie.dataset.MultiLabelEncoder.load_from_string(

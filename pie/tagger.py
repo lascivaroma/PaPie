@@ -104,7 +104,11 @@ class Tagger():
         self.models = []
 
     def add_model(self, model_path, *tasks):
-        model = BaseModel.load(model_path)
+        try:
+            model = BaseModel.load(model_path)
+        except Exception as E:
+            print(f"Unable to load {model_path}")
+            raise E
         for task in tasks:
             if task not in model.label_encoder.tasks:
                 raise ValueError("Model [{}] doesn't have task: {}".format(

@@ -1,3 +1,8 @@
+/*.json
+/*.tsv
+/*.csv
+out
+/model*
 # When flask is installed, produce a flask binary file
 flask
 # Tired of ignoring it
