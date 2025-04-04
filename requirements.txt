@@ -1,11 +1,11 @@
-numpy>=1.14.3,<1.24.0
+numpy
 JSON_minify>=0.3.0
 tqdm>=4.23.3
 termcolor>=1.1.0
 terminaltables~=3.1.0
-torch>=1.3.1,<2.0.0
+torch~=2.4.0
 pyyaml~=6.0
 typing
-click<8.0
+click
 pytorch-optimizer~=2.7.0
 torchmetrics

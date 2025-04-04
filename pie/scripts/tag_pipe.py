@@ -10,6 +10,7 @@ def run(model_spec, device, batch_size, lower, beam_width, use_beam, tokenize):
         tagger = Tagger(device=device, batch_size=batch_size, lower=lower)
 
         for model, tasks in model_spec:
+            print(model)
             tagger.add_model(model, *tasks)
             tasks = tasks or tagger.models[-1][0].label_encoder.tasks
 

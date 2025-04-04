@@ -79,19 +79,6 @@ class UploadCommand(Command):
         except OSError:
             pass
 
-        # Adds the commit for the verification when checking against
-        #   the model git sha
-        self.status('Writing commit SHA to pie/commit_build.py')
-        COMMIT_BUILD = os.path.join(here, "pie", "commit_build.py")
-
-        try:
-            from pie.utils import GitInfo
-            __commit__ = GitInfo(os.path.join(here, "pie", "__init__.py")).get_commit()
-            with open(COMMIT_BUILD, "w") as f:
-                f.write("COMMIT = '" + __commit__ + "'")
-        except Exception as E:
-            raise E
-
         self.status('Building Source and Wheel (universal) distribution…')
         os.system('{0} setup.py sdist bdist_wheel --universal'.format(sys.executable))
 

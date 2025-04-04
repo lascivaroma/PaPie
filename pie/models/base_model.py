@@ -136,11 +136,6 @@ class BaseModel(nn.Module):
             # serialize weights
             utils.add_weights_to_tar(self.state_dict(), 'state_dict.pt', tar)
 
-            # serialize current pie commit
-            if pie.__commit__ is not None:
-                string, path = pie.__commit__, 'pie-commit.zip'
-                utils.add_gzip_to_tar(string, path, tar)
-
             # if passed, serialize settings
             if settings is not None:
                 string, path = json.dumps(settings), 'settings.zip'
@@ -164,17 +159,6 @@ class BaseModel(nn.Module):
         import pie
 
         with tarfile.open(utils.ensure_ext(fpath, 'tar'), 'r') as tar:
-            # check commit
-            try:
-                commit = utils.get_gzip_from_tar(tar, 'pie-commit.zip')
-            except Exception:
-                commit = None
-            if (pie.__commit__ and commit) and pie.__commit__ != commit:
-                logging.warn(
-                    ("Model {} was serialized with a previous "
-                     "version of `pie`. This might result in issues. "
-                     "Model commit is {}, whereas current `pie` commit is {}.").format(
-                         fpath, commit, pie.__commit__))
 
             # load label encoder
             le = MultiLabelEncoder.load_from_string(
