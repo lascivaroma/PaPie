@@ -6,6 +6,7 @@ import time
 import collections
 import random
 import tempfile
+import warnings
 from typing import ClassVar
 
 import tqdm
@@ -84,6 +85,7 @@ class TaskScheduler(object):
         self.threshold = settings.threshold
         self.min_weight = settings.min_weight
         self.fid = os.path.join(tempfile.gettempdir(), str(uuid.uuid1()))
+        self.best_epoch = 0
 
     def __repr__(self):
         # task scheduler
@@ -111,7 +113,7 @@ class TaskScheduler(object):
         else:
             raise ValueError("Wrong mode value [{}] for task: {}".format(mode, task))
 
-    def step(self, scores, model):
+    def step(self, scores, model, epoch):
         """
         Advance schedule step based on dev scores
         """
@@ -129,6 +131,7 @@ class TaskScheduler(object):
                 if is_target:
                     # serialize model params
                     torch.save(model.state_dict(), self.fid)
+                    self.best_epoch = epoch
             else:
                 self.tasks[task]['steps'] += 1
 
@@ -223,6 +226,8 @@ class Trainer(object):
             self.check_freq = self.num_batches // settings.checks_per_epoch  # check just
         else:
             self.check_freq = 0  # no checks
+
+        self.current_epoch = 0
 
         self.task_scheduler = TaskScheduler(settings)
         self.lr_scheduler = LRScheduler(
@@ -329,7 +334,7 @@ class Trainer(object):
             dev_scores['lm_fwd'] = dev_loss['lm_fwd']
             dev_scores['lm_bwd'] = dev_loss['lm_bwd']
 
-        self.task_scheduler.step(dev_scores, self.model)
+        self.task_scheduler.step(dev_scores, self.model, self.current_epoch)
         self.lr_scheduler.step(dev_scores[self.target_task])
 
         if self.verbose:
@@ -340,7 +345,7 @@ class Trainer(object):
 
         return dev_scores
 
-    def train_epoch(self, devset, epoch):
+    def train_epoch(self, devset):
         rep_loss = collections.defaultdict(float)
         rep_batches = collections.defaultdict(int)
         rep_items, rep_start = 0, time.time()
@@ -395,11 +400,12 @@ class Trainer(object):
         scores = None
 
         try:
-            for epoch in range(1, epochs + 1):
+            for epoch in range(self.current_epoch + 1, epochs + 1):
                 # train epoch
+                self.current_epoch += 1
                 epoch_start = time.time()
                 logging.info("Starting epoch [{}]".format(epoch))
-                self.train_epoch(devset, epoch)
+                self.train_epoch(devset)
                 epoch_total = time.time() - epoch_start
                 logging.info("Finished epoch [{}] in [{:.0f}] secs".format(
                     epoch, epoch_total))
@@ -407,11 +413,26 @@ class Trainer(object):
         except EarlyStopException as e:
             logging.info("Early stopping training: "
                          "task [{}] with best score {:.4f}".format(e.task, e.loss))
-
+            
+            print(f"Loading best model (epoch {self.task_scheduler.best_epoch}) for target task {self.target_task}")
+            self.model.last_state_dict = self.model.state_dict()
             self.model.load_state_dict(e.best_state_dict)
             scores = {e.task: e.loss}
+        else:
+            # Load best model
+            print(f"Loading best model (epoch {self.task_scheduler.best_epoch}) for target task {self.target_task}")
+            self.model.last_state_dict = self.model.state_dict()
+            if os.path.exists(self.task_scheduler.fid):
+                best_state_dict = torch.load(self.task_scheduler.fid)
+                self.model.load_state_dict(best_state_dict)
+            else:
+                warnings.warn(
+                    f"Temp path with best model weights doesn't exist ({self.task_scheduler.fid}). "
+                    "Maybe the model never improved over training ?"
+                )
+            scores = {self.target_task: self.task_scheduler.tasks[self.target_task]['best']}
 
         logging.info("Finished training in [{:.0f}] secs".format(time.time() - start))
 
-        # will be None if no dev test was provided or the model failed to converge
+        # will be None if no dev test was provided
         return scores

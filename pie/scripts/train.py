@@ -24,11 +24,14 @@ def get_targets(settings):
     return [task['name'] for task in settings.tasks if task.get('target')]
 
 
-def get_fname_infix(settings):
+def get_fname_infix(settings, epoch=None):
     # fname
     fname = os.path.join(settings.modelpath, settings.modelname)
     timestamp = datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
-    infix = '+'.join(get_targets(settings)) + '-' + timestamp
+    infix = '+'.join(get_targets(settings))
+    if epoch:
+        infix += f"-{epoch}"
+    infix += '-' + timestamp
     return fname, infix
 
 
@@ -229,20 +232,34 @@ def run(settings, seed=None):
         model.eval()
     running_time = time.time() - running_time
 
+    # evaluate best model on devset
+    if settings.dev_path:
+        print()
+        print("Evaluating best model on dev set...")
+        print()
+        model.eval()
+        stored_scores = {}
+        with torch.no_grad():
+            dev_loss = trainer.evaluate(devset)
+            print()
+            print("::: Dev losses :::")
+            print()
+            print('\n'.join('{}: {:.4f}'.format(k, v) for k, v in dev_loss.items()))
+            print()
+            summary = model.evaluate(devset, trainer.dataset)
+            for task_name, scorer in summary.items():
+                stored_scores[task_name] = scorer.get_scores()
+                scorer.print_summary(scores=stored_scores[task_name])
+
+    # evaluate best model on test set
     if settings.test_path:
-        print("Evaluating model on test set")
+        print("Evaluating best model on test set")
         try:
             testset = Dataset(settings, Reader(settings, settings.test_path), label_encoder)
             for task in model.evaluate(testset, trainset).values():
                 task.print_summary()
         except Exception as E:
             print(E)
-
-    # save model
-    fpath, infix = get_fname_infix(settings)
-    if not settings.run_test:
-        fpath = model.save(fpath, infix=infix, settings=settings)
-        print("Saved best model to: [{}]".format(fpath))
 
     if devset is not None and not settings.run_test:
         scorers = model.evaluate(devset, trainset)
@@ -258,9 +275,23 @@ def run(settings, seed=None):
         path = '{}.results.{}.csv'.format(
             settings.modelname, '-'.join(get_targets(settings)))
         with open(path, 'a') as f:
+            _, infix = get_fname_infix(settings)
             line = [infix, str(seed), str(running_time)]
             line += scores
             f.write('{}\n'.format('\t'.join(line)))
+
+    # save model
+    if not settings.run_test:
+        # Save best model
+        fpath, infix = get_fname_infix(settings, epoch="best")
+        fpath = model.save(fpath, infix=infix, settings=settings)
+        print("Saved best model to: [{}]".format(fpath))
+        # Save last model
+        if "last_state_dict" in model.__dict__:
+            model.load_state_dict(model.last_state_dict)
+            fpath, infix = get_fname_infix(settings, epoch="last")
+            fpath = model.save(fpath, infix=infix, settings=settings)
+            print("Saved last model to: [{}]".format(fpath))
 
     print("Bye!")
 
