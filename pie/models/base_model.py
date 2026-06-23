@@ -152,9 +152,13 @@ class BaseModel(nn.Module):
             return Settings(json.loads(utils.get_gzip_from_tar(tar, 'settings.zip')))
 
     @staticmethod
-    def load(fpath):
+    def load(fpath, quantize=False):
         """
         Load model from path
+
+        quantize : bool, if True apply INT8 dynamic quantization to the RNN and
+            Linear layers for faster CPU inference (no retraining, small accuracy
+            delta). Opt-in.
         """
         import pie
 
@@ -186,5 +190,11 @@ class BaseModel(nn.Module):
             # load state_dict
             model.load_state_dict(torch.load(tar.extractfile('state_dict.pt'), map_location='cpu'))
         model.eval()
+
+        if quantize:
+            # inplace=True avoids a deepcopy of the freshly-loaded model (some
+            # attached objects, e.g. the label encoder, aren't deepcopy-able)
+            model = torch.quantization.quantize_dynamic(
+                model, {nn.LSTM, nn.GRU, nn.Linear}, dtype=torch.qint8, inplace=True)
 
         return model

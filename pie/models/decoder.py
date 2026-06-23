@@ -330,7 +330,7 @@ class AttentionalDecoder(nn.Module):
         hidden, batch, device = None, enc_outs.size(1), enc_outs.device
         inp = torch.zeros(batch, dtype=torch.int64, device=device) + bos
         hyps = []
-        final_scores = torch.tensor([0 for _ in range(batch)], dtype=torch.float64, device="cpu")
+        final_scores = torch.zeros(batch, dtype=torch.float64, device=device)
 
         # As we go, we'll reduce the tensor size by popping finished prediction
         #  To keep adding new characters to the right words, we
@@ -388,10 +388,11 @@ class AttentionalDecoder(nn.Module):
             # We set the score where we have EOS predictions as 0
             score[inp == eos] = 0
             # So that we can add the score to finale scores
-            final_scores[tensor_to_original_batch_indexes.cpu()] += score.cpu()
+            final_scores[tensor_to_original_batch_indexes] += score.to(final_scores.dtype)
 
-            # We add this new output to the final hypothesis
-            hyps.append(seq_output.tolist())
+            # We add this new output to the final hypothesis (stays on device;
+            # stringified once after the loop to avoid per-step CPU syncs)
+            hyps.append(seq_output)
 
             # If there nothing else than EOS, it's the end of the prediction time
             if non_eos.sum() == 0:
@@ -424,8 +425,10 @@ class AttentionalDecoder(nn.Module):
             max_seq_len = lengths.max()
             enc_outs = enc_outs[:max_seq_len, keep, :]
 
-        hyps = [self.label_encoder.stringify(hyp) for hyp in zip(*hyps)]
-        final_scores = [s / (len(hyp) + TINY) for s, hyp in zip(final_scores, hyps)]
+        # (max_seq_len x batch) -> per-word list of char ids, stringified once
+        hyps = torch.stack(hyps, dim=0).t().tolist()
+        hyps = [self.label_encoder.stringify(hyp) for hyp in hyps]
+        final_scores = [s / (len(hyp) + TINY) for s, hyp in zip(final_scores.tolist(), hyps)]
 
         return hyps, final_scores
 

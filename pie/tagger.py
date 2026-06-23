@@ -5,6 +5,7 @@ import os
 import itertools
 
 import tqdm
+import torch
 
 from pie.models import BaseModel
 from pie.data import pack_batch
@@ -94,18 +95,24 @@ def lines_from_file(fpath, tokenize=False, max_sent_len=35, vrt=False):
 
 class Tagger():
     def __init__(self, device='cpu', batch_size=100,
-                 lower=False, tokenize=False, vrt=False, max_sent_len=35):
+                 lower=False, tokenize=False, vrt=False, max_sent_len=35,
+                 quantize=False, cache=False, cache_size=100000, num_threads=None):
         self.device = device
         self.batch_size = batch_size
         self.lower = lower
         self.tokenize = tokenize
         self.vrt = vrt
         self.max_sent_len = max_sent_len
+        self.quantize = quantize
+        self.cache = cache
+        self.cache_size = cache_size
+        if num_threads is not None:
+            torch.set_num_threads(num_threads)
         self.models = []
 
     def add_model(self, model_path, *tasks):
         try:
-            model = BaseModel.load(model_path)
+            model = BaseModel.load(model_path, quantize=self.quantize)
         except Exception as E:
             print(f"Unable to load {model_path}")
             raise E
@@ -113,6 +120,12 @@ class Tagger():
             if task not in model.label_encoder.tasks:
                 raise ValueError("Model [{}] doesn't have task: {}".format(
                     model_path, task))
+
+        # enable the char-embedding cache (useful when serving, where the same
+        # word-forms recur across requests; safe since char encoding is pure)
+        if self.cache and getattr(model, 'cemb', None) is not None \
+                and hasattr(model.cemb, 'enable_cache'):
+            model.cemb.enable_cache(self.cache_size)
 
         self.models.append((model, tasks))
 
@@ -132,8 +145,10 @@ class Tagger():
 
             inp, _ = pack_batch(model.label_encoder, batch, self.device)
 
-            # inference
-            preds = model.predict(inp, *tasks, **kwargs)
+            # inference (no autograd graph: the model is eval()'d, this also
+            # avoids building/holding the graph during the decoder loop)
+            with torch.inference_mode():
+                preds = model.predict(inp, *tasks, **kwargs)
 
             for task in preds:
                 # flatten all sentences (since some tasks return flattened output)
