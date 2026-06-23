@@ -1,4 +1,6 @@
 
+from collections import OrderedDict
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -86,6 +88,12 @@ class RNNEmbedding(nn.Module):
         self.embedding_dim = embedding_dim * 2  # bidirectional
         super().__init__()
 
+        # Optional inference-time cache mapping a word's char-id tuple to its
+        # (per-word embedding, per-char states). Disabled by default; only used
+        # for inference (the char encoding is a pure function of the char ids).
+        self._cache = None
+        self._cache_maxsize = 0
+
         self.emb = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx)
         initialization.init_embeddings(self.emb)
 
@@ -98,6 +106,100 @@ class RNNEmbedding(nn.Module):
                 num_layers=num_layers, dropout=dropout if num_layers > 1 else 0)
             initialization.init_rnn(self.rnn, scheme=init_rnn)
 
+    def enable_cache(self, maxsize=100000):
+        """Enable the inference char-embedding cache (e.g. for serving)."""
+        self._cache = OrderedDict()
+        self._cache_maxsize = maxsize
+
+    def disable_cache(self):
+        self._cache = None
+        self._cache_maxsize = 0
+
+    def clear_cache(self):
+        if self._cache is not None:
+            self._cache.clear()
+
+    def _encode_words(self, char, nchars):
+        """Run the char BiRNN over each word column (no sentence padding).
+
+        Returns
+        =======
+        emb : tensor(total_words x 2 * hidden), per-word summary (last hidden)
+        outs : tensor(max_char_len x total_words x 2 * hidden), per-char states
+        """
+        nwords = char.size(1)
+        # embed
+        char = self.emb(char)
+        # rnn
+        hidden = None
+        _, sort = torch.sort(nchars, descending=True)
+        _, unsort = sort.sort()
+        char, nchars = char[:, sort], nchars[sort]
+        if isinstance(self.rnn, CustomBiLSTM):
+            outs, (emb, _) = self.rnn(char, hidden, nchars)
+        else:
+            # standard nn.LSTM/GRU (also covers the INT8-quantized variants,
+            # which are not nn.RNNBase subclasses)
+            outs, emb = self.rnn(
+                nn.utils.rnn.pack_padded_sequence(char, nchars.cpu()), hidden)
+            outs, _ = nn.utils.rnn.pad_packed_sequence(outs)
+            if isinstance(emb, tuple):
+                emb, _ = emb
+        # (max_seq_len x batch * nwords x emb_dim)
+        outs, emb = outs[:, unsort], emb[:, unsort]
+        # (layers * 2 x batch x hidden) -> (layers x 2 x batch x hidden)
+        emb = emb.view(self.num_layers, 2, nwords, -1)
+        # use only last layer
+        emb = emb[-1]
+        # (2 x batch x hidden) - > (batch x 2 * hidden)
+        emb = emb.transpose(0, 1).contiguous().view(nwords, -1)
+
+        return emb, outs
+
+    def _encode_words_cached(self, char, nchars):
+        """Cache-aware variant of `_encode_words`.
+
+        The char encoding is a pure function of a word's char ids, so identical
+        word-forms are encoded once: cache misses (deduplicated) are run through
+        the BiRNN, the rest is reassembled from the cache. Produces output
+        identical to `_encode_words`.
+        """
+        cache = self._cache
+        nchars_list = nchars.tolist()
+        keys = [tuple(char[:n, j].tolist()) for j, n in enumerate(nchars_list)]
+
+        # gather the (deduplicated) cache misses
+        miss_cols, seen = [], set()
+        for j, key in enumerate(keys):
+            if key not in cache and key not in seen:
+                seen.add(key)
+                miss_cols.append(j)
+
+        if miss_cols:
+            idx = torch.tensor(miss_cols, dtype=torch.int64, device=char.device)
+            emb_miss, outs_miss = self._encode_words(char[:, idx], nchars[idx])
+            for i, j in enumerate(miss_cols):
+                n = nchars_list[j]
+                cache[keys[j]] = (emb_miss[i].clone(), outs_miss[:n, i].clone())
+            while len(cache) > self._cache_maxsize:
+                cache.popitem(last=False)
+
+        # reassemble the full batch from the cache
+        sample = next(iter(cache.values()))[0]
+        out_len = max(nchars_list)
+        emb = torch.zeros(
+            (len(keys), self.embedding_dim), dtype=sample.dtype, device=sample.device)
+        outs = torch.zeros(
+            (out_len, len(keys), self.embedding_dim),
+            dtype=sample.dtype, device=sample.device)
+        for j, key in enumerate(keys):
+            word_emb, word_outs = cache[key]
+            cache.move_to_end(key)  # LRU: mark as recently used
+            emb[j] = word_emb
+            outs[:word_outs.size(0), j] = word_outs
+
+        return emb, outs
+
     def forward(self, char, nchars, nwords):
         """
         Parameters
@@ -106,29 +208,10 @@ class RNNEmbedding(nn.Module):
         nchars : tensor(batch)
         nwords : tensor(output batch)
         """
-        # embed
-        char = self.emb(char)
-        # rnn
-        hidden = None
-        _, sort = torch.sort(nchars, descending=True)
-        _, unsort = sort.sort()
-        char, nchars = char[:, sort], nchars[sort]
-        if isinstance(self.rnn, nn.RNNBase):
-            outs, emb = self.rnn(
-                nn.utils.rnn.pack_padded_sequence(char, nchars.cpu()), hidden)
-            outs, _ = nn.utils.rnn.pad_packed_sequence(outs)
-            if isinstance(emb, tuple):
-                emb, _ = emb
+        if self._cache is None:
+            emb, outs = self._encode_words(char, nchars)
         else:
-            outs, (emb, _) = self.rnn(char, hidden, nchars)
-        # (max_seq_len x batch * nwords x emb_dim)
-        outs, emb = outs[:, unsort], emb[:, unsort]
-        # (layers * 2 x batch x hidden) -> (layers x 2 x batch x hidden)
-        emb = emb.view(self.num_layers, 2, len(nchars), -1)
-        # use only last layer
-        emb = emb[-1]
-        # (2 x batch x hidden) - > (batch x 2 * hidden)
-        emb = emb.transpose(0, 1).contiguous().view(len(nchars), -1)
+            emb, outs = self._encode_words_cached(char, nchars)
         # (batch x 2 * hidden) -> (nwords x batch x 2 * hidden)
         emb = torch_utils.pad_flat_batch(emb, nwords, maxlen=max(nwords).item())
 

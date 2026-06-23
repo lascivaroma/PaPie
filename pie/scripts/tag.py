@@ -32,6 +32,13 @@ if __name__ == '__main__':
     parser.add_argument('--lower', action='store_true')
     parser.add_argument('--max_sent_len', type=int, default=35)
     parser.add_argument('--vrt', action='store_true')
+    parser.add_argument('--quantize', action='store_true',
+                        help="INT8-quantize RNN/Linear layers for faster CPU inference")
+    parser.add_argument('--cache', action='store_true',
+                        help="cache char-embeddings of repeated word-forms")
+    parser.add_argument('--cache_size', type=int, default=100000)
+    parser.add_argument('--num_threads', type=int, default=None,
+                        help="torch CPU thread count (default: torch's own)")
     args = parser.parse_args()
 
     run(args.model_spec, args.input_path,
@@ -39,4 +46,5 @@ if __name__ == '__main__':
         keep_boundaries=args.keep_boundaries,
         device=args.device, batch_size=args.batch_size,
         lower=args.lower, max_sent_len=args.max_sent_len,
-        vrt=args.vrt)
+        vrt=args.vrt, quantize=args.quantize, cache=args.cache,
+        cache_size=args.cache_size, num_threads=args.num_threads)
