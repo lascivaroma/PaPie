@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "PaPie"
-version = "0.5.0"
+version = "0.6.0"
 description = "A Framework for Joint Learning of Sequence Labeling Tasks, forked from Pie"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
     { name = "Enrique Manjavacas" },
