@@ -52,9 +52,10 @@ def chunk(seq, size):
     return [seq[i:i + size] for i in range(0, len(seq), size)]
 
 
-def predict(model_path, task, forms, sents, lengths, quantize=False, cache=False):
+def predict(model_path, task, forms, sents, lengths,
+            quantize=False, cache=False, device="cpu"):
     """Tag `sents` and return (flat predictions, elapsed seconds)."""
-    tagger = Tagger(quantize=quantize, cache=cache)
+    tagger = Tagger(device=device, quantize=quantize, cache=cache)
     tagger.add_model(model_path, task)
     start = time.perf_counter()
     tagged, _ = tagger.tag(sents, lengths)
@@ -83,6 +84,9 @@ def main():
                         help="max tokens to evaluate (the lemma decoder is slow on CPU)")
     parser.add_argument("--sent-len", type=int, default=20,
                         help="fixed chunk size used to form pseudo-sentences")
+    parser.add_argument("--device", default="cpu",
+                        help="torch device, e.g. cpu or cuda (default: cpu). "
+                             "Note: INT8 dynamic quantization is CPU-only.")
     args = parser.parse_args()
 
     header, rows = read_tsv(args.tsv, args.limit)
@@ -100,29 +104,45 @@ def main():
             parser.error(f"task {task!r} is not a column in the TSV header {header}")
         gold = [r[header.index(task)] for r in rows]
 
-        fp32, t_fp32 = predict(model_path, task, forms, sents, lengths)
-        int8, t_int8 = predict(model_path, task, forms, sents, lengths, quantize=True)
-        cached, t_cache = predict(model_path, task, forms, sents, lengths, cache=True)
+        fp32, t_fp32 = predict(model_path, task, forms, sents, lengths,
+                               device=args.device)
+        int8, t_int8 = predict(model_path, task, forms, sents, lengths,
+                               quantize=True, device=args.device)
+        cached, t_cache = predict(model_path, task, forms, sents, lengths,
+                                  cache=True, device=args.device)
+        both, t_both = predict(model_path, task, forms, sents, lengths,
+                               quantize=True, cache=True, device=args.device)
 
-        a_fp32, a_int8 = accuracy(fp32, gold), accuracy(int8, gold)
         ntok = len(fp32)
 
+        def spd(t):
+            return f"{ntok / t:6.0f} tok/s"
+
+        def up(t):
+            return f"{t_fp32 / t:.2f}x ({(t_fp32 / t - 1) * 100:+.0f}%)"
+
         print(f"===== {task}  ({model_path}) =====")
-        print(f"  accuracy   fp32={a_fp32:.4f}   int8={a_int8:.4f}   "
-              f"delta={a_int8 - a_fp32:+.4f}")
+        print(f"  accuracy   fp32={accuracy(fp32, gold):.4f}   "
+              f"int8={accuracy(int8, gold):.4f} ({accuracy(int8, gold) - accuracy(fp32, gold):+.4f})   "
+              f"cache={accuracy(cached, gold):.4f} ({accuracy(cached, gold) - accuracy(fp32, gold):+.4f})   "
+              f"int8+cache={accuracy(both, gold):.4f} ({accuracy(both, gold) - accuracy(fp32, gold):+.4f})")
         print(f"  agreement  fp32-vs-int8={agreement(fp32, int8):.4f}   "
-              f"fp32-vs-cache={agreement(fp32, cached):.4f}")
-        print(f"  speed      fp32={ntok / t_fp32:6.0f} tok/s             "
-              f"int8={ntok / t_int8:6.0f} tok/s   "
-              f"cache={ntok / t_cache:6.0f} tok/s")
-        print(f"  speedup    fp32=1.00x (baseline)   "
-              f"int8={t_fp32 / t_int8:.2f}x ({(t_fp32 / t_int8 - 1) * 100:+.0f}%)   "
-              f"cache={t_fp32 / t_cache:.2f}x ({(t_fp32 / t_cache - 1) * 100:+.0f}%)")
-        if cached == fp32:
-            print("  cache is loss-free (predictions identical to fp32) ✓")
-        else:
-            print(f"  WARNING: cache differs from fp32 on "
-                  f"{sum(a != b for a, b in zip(fp32, cached))} tokens")
+              f"fp32-vs-cache={agreement(fp32, cached):.4f}   "
+              f"fp32-vs-int8+cache={agreement(fp32, both):.4f}")
+        print(f"  speed      fp32={spd(t_fp32)}   int8={spd(t_int8)}   "
+              f"cache={spd(t_cache)}   int8+cache={spd(t_both)}")
+        print(f"  speedup    fp32=1.00x   int8={up(t_int8)}   "
+              f"cache={up(t_cache)}   int8+cache={up(t_both)}")
+        for name, preds in (("cache", cached), ("int8+cache", both)):
+            # cache must be loss-free relative to its non-cached counterpart
+            ref = fp32 if name == "cache" else int8
+            if preds == ref:
+                print(f"  {name} is loss-free vs {'fp32' if name == 'cache' else 'int8'} "
+                      f"(identical predictions) ✓")
+            else:
+                print(f"  WARNING: {name} differs from "
+                      f"{'fp32' if name == 'cache' else 'int8'} on "
+                      f"{sum(a != b for a, b in zip(ref, preds))} tokens")
         print()
 
 
