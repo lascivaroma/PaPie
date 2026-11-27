@@ -407,7 +407,8 @@ class AttentionalDecoder(nn.Module):
             #   inp, context, lengths are all Tensor(batch_size x ....)
             #   so we filter them at the first dimension
             inp = inp[keep]
-            context = context[keep]
+            if context is not None:
+                context = context[keep]
             lengths = lengths[keep]
 
             # However, hidden is 3D (Tensor(1 x batch_size x _)

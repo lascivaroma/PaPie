@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "PaPie"
-version = "0.6.0"
+version = "0.6.1"
 description = "A Framework for Joint Learning of Sequence Labeling Tasks, forked from Pie"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -19,6 +19,12 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Text Processing :: Linguistic",
 ]
@@ -41,3 +47,7 @@ exclude = ["test*", "tests*"]
 
 [tool.setuptools.package-data]
 pie = ["default_settings.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning:torch"]

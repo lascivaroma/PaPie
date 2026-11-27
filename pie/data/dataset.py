@@ -161,7 +161,11 @@ class LabelEncoder(object):
                             .format(self.name))
 
         # Sort freqs by order of frequency, and alphabetically in case of ties
-        vocab = sorted(self.freqs.most_common(), key=lambda x: (-x[1], x[0]))
+        # (non-string symbols, e.g. edit-tree classes, may not be orderable
+        # against each other, so fall back to their repr for tie-breaking)
+        vocab = sorted(
+            self.freqs.most_common(),
+            key=lambda x: (-x[1], x[0] if isinstance(x[0], str) else repr(x[0])))
 
         # Apply min_freq
         if self.min_freq:

@@ -27,10 +27,13 @@ FULLSTOP = r'([^\.]+\.)'
 WORD = r'([{}])'.format(string.punctuation)
 
 
-def simple_tokenizer(text):
+def simple_tokenizer(text, lower=False):
     section = regexsplitter(SECTION)
     fullstop = regexsplitter(FULLSTOP)
     word = regexsplitter(WORD)
+
+    if lower:
+        text = text.lower()
 
     for line in section(text):
         for sent in fullstop(line):
@@ -45,6 +48,8 @@ def get_sentences_vrt(fpath, max_sent_len):
             if sent and not line or len(sent) >= max_sent_len:
                 yield sent
                 sent = []
+            if not line:
+                continue
             w, *_ = line.split()
             sent.append(w)
         if sent:
@@ -86,8 +91,9 @@ def lines_from_file(fpath, tokenize=False, max_sent_len=35, vrt=False):
     if tokenize:
         # ignore vrt
         with open(fpath) as f:
-            for sent in simple_tokenizer(line):
-                yield sent, len(sent)
+            for line in f:
+                for sent in simple_tokenizer(line):
+                    yield sent, len(sent)
     else:
         for sent in get_sentences(fpath, max_sent_len, vrt):
             yield sent, len(sent)
